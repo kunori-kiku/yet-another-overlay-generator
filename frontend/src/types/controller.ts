@@ -1,3 +1,5 @@
+import type { DeviceInventoryMetric, DeviceSamplesMetric } from './deviceTelemetry';
+
 // Frontend data model for the controller panel (plan-4.5 networked controller).
 // These types mirror the operator-facing JSON shapes in internal/api/wire_controller.go,
 // but uniformly use camelCase. Per-domain modules under api/controller/ map the backend's
@@ -63,6 +65,11 @@ export interface ControllerNode {
   // disclose internal addressing and a frozen result becomes misleading, so the persistence boundary
   // strips this field alongside the other telemetry projections.
   probeResults?: TelemetryProbeResult[];
+  // Bounded categorical inventory and current numeric device readings. Both are authenticated live
+  // telemetry, not durable browser state: labels/mounts describe fleet hardware and current values
+  // become misleading after reload, so stripLiveTelemetry removes both before persistence.
+  deviceInventory?: DeviceInventoryMetric;
+  deviceSamples?: DeviceSamplesMetric;
   // nativeXDP is the egress NIC's native-XDP capability heuristic (plan-4 metrics["native_xdp"]) — a
   // PRE-DEPLOY advisory so the panel can warn before an operator picks xdp_mode=native. Live-only
   // (stripped before the persisted cache, like resource — telemetry stays out of localStorage).
@@ -75,6 +82,11 @@ export interface ControllerNode {
   // Live-only (stripped before the persisted cache, like resource). Advisory only; no endpoint/IP/key
   // material. Optional — absent for a pre-plan-3 agent or before the first heartbeat.
   mimicCapability?: MimicCapability;
+  // agentCapabilities is the strict, bounded executable-capability set from the latest accepted
+  // authenticated heartbeat. undefined means no valid current evidence ("Not confirmed"); [] is a
+  // valid confirmed heartbeat advertising no successor capabilities. Live-only and stripped before
+  // browser persistence: stale compatibility evidence must never imply readiness.
+  agentCapabilities?: string[];
 }
 
 // WireGuardPeer is one peer's live link health (the per-link panel row). peer is the link name (the
@@ -111,20 +123,45 @@ export type TelemetryProbeFailureReason =
   | 'permission_denied'
   | 'connection_refused'
   | 'network_unreachable'
-  | 'network_error';
+  | 'network_error'
+  | 'unexpected_status';
 
-// TelemetryProbeResult is one bounded ICMP/TCP check result reported by the agent. host is the
-// configured IP literal or DNS hostname; resolved addresses are intentionally not exposed.
-export interface TelemetryProbeResult {
+interface TelemetryProbeResultBase {
   id: string;
-  type: 'icmp' | 'tcp';
-  host: string;
-  port?: number;
   status: TelemetryProbeResultStatus;
   latencyMS?: number;
   checkedAt?: string;
   failureReason?: TelemetryProbeFailureReason;
 }
+
+// One bounded signed-policy result reported by the agent. Resolved addresses are intentionally not
+// exposed. URL response codes are latest categorical metadata, never a numeric history metric.
+export type TelemetryProbeResult = TelemetryProbeResultBase & (
+  | {
+      type: 'icmp';
+      host: string;
+      port?: never;
+      url?: never;
+      expectedStatus?: never;
+      actualStatus?: never;
+    }
+  | {
+      type: 'tcp';
+      host: string;
+      port: number;
+      url?: never;
+      expectedStatus?: never;
+      actualStatus?: never;
+    }
+  | {
+      type: 'url';
+      url: string;
+      expectedStatus: number;
+      actualStatus?: number;
+      host?: never;
+      port?: never;
+    }
+);
 
 // NativeXDP is the node's egress-NIC native-XDP capability heuristic (plan-4), projected from the
 // agent's metrics["native_xdp"]. Best-effort (driver-name + kernel heuristic, pure sysfs — no live-NIC
@@ -164,5 +201,8 @@ export interface StageResult {
   // stage touched everyone. The result area surfaces "staged N / unchanged M".
   unchanged: string[];
   skippedUnenrolled: string[];
+  // Nodes whose successor-only telemetry fields were omitted from an explicit
+  // upgrade-agents-first stage. Empty for an ordinary stage.
+  telemetryPolicyOmittedNodeIDs: string[];
   generation: number;
 }

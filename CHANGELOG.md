@@ -9,6 +9,85 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-rc.12] - 2026-07-17
+
+**Release candidate.** Repairs the deployment regressions exposed by editing signed telemetry policy,
+finishes display-only probe names and routine-audit noise reduction, and adds the owner-authorized
+compatibility-preserving URL and automatic-device telemetry extension. Existing ICMP/TCP-only nodes
+retain byte-identical version-1 policy. Successor features use a separately named signed policy member
+and require an explicit agent-upgrade deployment before activation, so existing agents are not forced
+to parse or apply a contract they do not support.
+
+### Security
+
+- **Successor telemetry remains a closed, signed policy surface.** `telemetry.json` stays frozen at
+  version 1; URL or automatic-device policy uses the mutually exclusive
+  `telemetry-policy.json` version-2 member. The selected member is checksummed, optionally tier-1
+  signed, keystone-bound, verified before mutation, and committed as last-known-good only after a
+  successful apply. An older launcher fails before host mutation instead of silently ignoring it.
+- **URL probes cannot become arbitrary remote requests.** A probe permits one absolute HTTP(S) URL,
+  fixed GET, ordinary TLS verification, no redirects, no ambient proxy, no request headers/body, no
+  response-body consumption, and bounded URL, timeout, response-header, and concurrency limits. One
+  exact expected success code defaults to 200; the actual returned code is live categorical context,
+  while latency and availability alone enter history and charts.
+- **Automatic hardware discovery is opt-in and bounded.** The Linux collector admits a capped set of
+  eligible block devices, block-backed mounts, AMD `amdgpu` sysfs devices, and rows from a fixed
+  absolute `nvidia-smi` query. It uses opaque hashed series IDs, bounded file/process reads, fixed
+  arguments, and no shell. Unsupported devices remain status metadata rather than becoming guessed
+  numeric values.
+
+### Added
+
+- **Fleet supports named ICMP, TCP, and URL checks.** The optional name is operator-facing metadata;
+  executable policy, bundle deltas, agent reports, and exact history identity continue to use the
+  stable ID and typed destination. Changing only a name therefore neither restages a bundle nor
+  advances the generation.
+- **Fleet can enable automatic disk, filesystem, and GPU telemetry per managed node.** Inventory and
+  provider status remain live-only. Filesystem-used percentage, disk read/write throughput, disk I/O
+  busy percentage, GPU utilization, and GPU VRAM-used percentage use the shared metric catalog,
+  bounded controller history, exact-series selectors, and the existing accessible time-series chart.
+- **URL checks reuse the probe observation framework.** Latest results show expected and actual status;
+  history shows latency, availability, and failure reasons without treating an HTTP code as a numeric
+  series.
+
+### Changed
+
+- **Successor rollout is an explicit two-deployment sequence.** First choose the upgrade-agents-first
+  path, which compiles a legacy-compatible projection while preserving the full saved draft. After
+  every affected ready managed node reports the exact authenticated URL/device capability, deploy
+  again to sign and activate the unchanged successor draft. Nodes outside configured signed-agent
+  rollout coverage still require Settings coverage or an out-of-band update.
+- **Routine node status is Fleet state rather than durable audit noise.** New `/report` and telemetry
+  heartbeats update applied-generation, health, live observations, and history without appending
+  high-frequency audit rows. The controller still verifies and serves the complete legacy chain; the
+  panel hides historical routine-report rows only after that verification.
+- **Device inventory and numeric samples have separate contracts.** Categorical identity/capacity/
+  status is live-only, while the closed numeric definition registry enforces projector, API, selector,
+  and chart coverage for every dynamic value. Missing or failed collection is a graph gap; a real zero
+  remains data.
+
+### Fixed
+
+- **Deleting or leaving a telemetry row unfinished no longer turns validation into a 500 or unsafe
+  Deploy-anyway path.** Save may retain a draft, while preview/stage returns structured validation for
+  invalid ready nodes without mutating served/staged state. The compatibility bypass is limited to an
+  old controller whose preview route is genuinely absent with 404/405.
+- **Historical client-to-router allocations remain stable.** The client endpoint correctly has no
+  per-link listen-port pin, while the router-side port and complete transit/link-local pairs remain
+  valid reservations across subgraph changes and unrelated deployments.
+- **Telemetry replay and cross-boot ownership preserve truthful charts and readiness.** Controller
+  receipt time remains authoritative for liveness; bounded sample time timestamps history and only
+  advises stale/ambiguous cross-boot live ownership. Reliable retries deduplicate, failures do not
+  fabricate zero latency, and capability evidence fails closed at ambiguous restart boundaries.
+- **The canonical local compile facade no longer mutates caller-owned topology collections.** Key,
+  default, allocation, and render write-back occur on copied slices, preserving deterministic output
+  without leaking normalized state into a caller after validation or compilation.
+
+**Hardware-validation note:** NVIDIA CSV parsing, AMD sysfs behavior, bounds, non-Linux portability,
+and amd64/arm64 builds are covered by fixtures and cross-platform gates. No physical NVIDIA or AMD GPU
+was available for this candidate's local smoke validation; real-hardware confirmation remains an
+explicit operational follow-up rather than a claimed release gate.
+
 ## [2.0.0-rc.11] - 2026-07-16
 
 **Release candidate.** Closes a final-component custody gap in FileStore records discovered during the
@@ -1444,7 +1523,8 @@ PRs #59–#65.
 
 - Initial release: visual topology design → WireGuard + Babel config generation.
 
-[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.11...HEAD
+[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.12...HEAD
+[2.0.0-rc.12]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.11...v2.0.0-rc.12
 [2.0.0-rc.11]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.10...v2.0.0-rc.11
 [2.0.0-rc.10]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.9...v2.0.0-rc.10
 [2.0.0-rc.9]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.8...v2.0.0-rc.9

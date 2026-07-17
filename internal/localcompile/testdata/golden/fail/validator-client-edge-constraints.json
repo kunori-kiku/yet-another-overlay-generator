@@ -3,9 +3,7 @@
   "verdict": {
     "validator": [
       "validation_client_multiple_outbound_edges",
-      "validation_edge_backup_touches_client",
-      "validation_pin_client_allocation_ignored",
-      "validation_pin_client_port_pin"
+      "validation_edge_backup_touches_client"
     ],
     "apierr": []
   },
@@ -30,12 +28,12 @@
     {
       "id": "e-client-pin",
       "compiled_port": 0,
-      "pinned_from_port": 51900,
+      "pinned_from_port": 0,
       "pinned_to_port": 51901,
       "pinned_from_transit_ip": "10.10.0.5",
       "pinned_to_transit_ip": "10.10.0.6",
-      "pinned_from_link_local": "",
-      "pinned_to_link_local": ""
+      "pinned_from_link_local": "fe80::5",
+      "pinned_to_link_local": "fe80::6"
     },
     {
       "id": "e-out",

@@ -13,12 +13,10 @@ localStorage round-trip (no new transport), and reused verbatim on the next comp
 keys are stabilized by the companion rule in [../data-model/node.md](../data-model/node.md): a node
 that already carries a `wireguard_public_key` is treated as key-fixed and its key is reused.
 
-> **Compliance:** current code does not satisfy most of this spec. Listen ports, transit pairs,
-> and link-locals are allocated by positional counters (`transitPairIndex`, `nodePortOffset`) over
-> `topo.Edges` order with nothing binding a value to a link identity
-> (`internal/compiler/peers.go:129-209,443-478`); the only stable value is `overlay_ip`. Keys
-> rotate on every compile for non-fixed nodes (`internal/api/handler.go:308-314`). Closed by the
-> sticky-pin allocation plan (outline milestone 7, Plan 7).
+> **Compliance:** the compiler writes the six sticky allocation fields and schema version, reserves
+> valid existing pins before gap filling, and reuses public keys according to the custody mode. The
+> client endpoint exception is part of that same contract: only its per-link port is absent; the
+> non-client port and complete address pairs remain identity-bound.
 
 ## Normative invariants (I1–I10)
 
@@ -87,17 +85,17 @@ key yet) or for an explicit, operator-initiated rotation. See
 The capacity of every allocation pool MUST be defined, and exhaustion MUST surface as a clear,
 attributable compile error **before** any silent collision or out-of-range value is emitted.
 
-- **Listen ports:** a node's per-peer ports start at its base `listen_port` (default `51820`) and
-  the highest assigned port MUST NOT exceed `65535`.
+- **Listen ports:** each node's per-peer allocation scans upward from the fixed fleet-wide
+  `allocconst.WGListenPortBase` (`51820`), and the highest assigned port MUST NOT exceed `65535`.
 - **Transit pool:** a `/24` transit CIDR yields at most 127 usable pairs (pair index 0..126,
   drawn from hosts `.1`–`.254`); pair index 127 would require the `.255` broadcast and MUST be
   rejected, not emitted.
 - **Link-local pool:** `fe80::/10` is effectively unbounded for practical fleet sizes; pairs MUST
   be formatted and parsed in a single consistent radix (see I3 / [pin validation](#pin-validation)).
 
-> **Violation example:** `base + offset` listen ports are rendered verbatim with no `65535` bound
-> (`internal/compiler/peers.go:174-191`); a high-degree hub silently emits an illegal port that
-> `wg-quick` rejects at deploy time rather than at compile time.
+> **Compliance:** `lowestFreePort` searches the bounded `[WGListenPortBase, 65535]` range and
+> returns a compile error when no port remains, so exhaustion cannot leak an invalid value into a
+> rendered WireGuard configuration.
 
 ### I7 — Validated pins and explicit renumber
 
@@ -149,20 +147,22 @@ persisted (localStorage + compile round-trip) exactly like `overlay_ip` is for n
 
 | JSON field | Holds | Pool |
 |---|---|---|
-| `pinned_from_port` | `from` node's listen port for this link | base `listen_port` .. 65535 |
-| `pinned_to_port` | `to` node's listen port for this link | base `listen_port` .. 65535 |
+| `pinned_from_port` | `from` node's listen port for this link | manual `[1024,65535]`; auto starts at the fixed fleet-wide `allocconst.WGListenPortBase` (`51820`) |
+| `pinned_to_port` | `to` node's listen port for this link | manual `[1024,65535]`; auto starts at the fixed fleet-wide `allocconst.WGListenPortBase` (`51820`) |
 | `pinned_from_transit_ip` | `from` end of the transit IP pair | domain `transit_cidr` |
 | `pinned_to_transit_ip` | `to` end of the transit IP pair | domain `transit_cidr` |
 | `pinned_from_link_local` | `from` end of the IPv6 link-local pair | `fe80::/10` |
 | `pinned_to_link_local` | `to` end of the IPv6 link-local pair | `fe80::/10` |
 
 All six are optional and omitempty; an edge with none of them set is **unpinned** and will be
-gap-filled. An edge MUST be either fully pinned (the full set of the values applicable to it) or
-fully unpinned for a given resource; partial pins for a single resource (e.g. `pinned_from_transit_ip`
-set but `pinned_to_transit_ip` empty) MUST be rejected (see [pin validation](#pin-validation)).
+gap-filled. Transit and link-local resources MUST be fully paired or fully absent. Listen ports are
+also paired on ordinary links. A client link is the endpoint-specific exception: the client endpoint
+uses the shared `wg0` and therefore keeps its port field empty, while the non-client endpoint owns one
+real sticky listen-port pin. `compiled_port` is the effective dial-port echo (including an explicit
+`endpoint_port` override), not a replacement for that sticky router-side pin.
 
-> **Compliance:** the Edge struct currently has no `pinned_*` fields
-> (`internal/model/topology.go:112-139`); only `compiled_port` (write-only) exists. Closed by Plan 7.
+> **Compliance:** `model.Edge` carries the six persisted fields and `CompiledPort`; compiler
+> write-back preserves the client-link exception without changing `alloc_schema_version`.
 
 ### Canonical link key — `pinKey(a, b)`
 
@@ -218,12 +218,12 @@ historical behavior). Every `role: "backup"` edge is its **own link** regardless
 5. **I9 with parallel edges.** Delete/re-add idempotence holds per link identity: re-adding a
    deleted primary-class link (same pair) reproduces its clean gap-fill values as before;
    re-adding a backup mints a new edge ID → a new identity → a fresh gap-fill. Documented and
-   accepted: backups are positional only in their own resources, never in anyone else's.
+   accepted: a re-added backup has a new edge-ID identity and therefore receives fresh gap-fill
+   resources, but it never renumbers another link's reserved resources.
 
-> **Compliance:** current pre-allocation keys both directions in a `from->to` / `to->from` map and
-> dedupes by an `addedPairs` set (`internal/compiler/peers.go:130,146-152,205-208`), which is
-> direction-tolerant for dedup but is still positional for the values it assigns. Plan 7 replaces
-> the positional assignment with `pinKey`-anchored reserve-then-gap-fill.
+> **Compliance:** `internal/linkid` supplies the canonical primary/backup link identities and
+> `internal/compiler/peers_build.go` performs identity-ordered reserve-then-gap-fill. Forward and
+> reverse primary-class edges share one allocation; backup identities remain edge-specific.
 
 ### Reserve-all-pins-first, then gap-fill
 
@@ -278,15 +278,14 @@ failure is a compile-blocking error, not a warning.
 |---|---|---|
 | **Duplicate pin** | two distinct **linkKeys** reserve the same port-on-a-node, the same transit IP, or the same link-local (forward/reverse edges of one link share values legitimately; parallel links of the same pair are distinct linkKeys and MUST NOT share) | reject: pinned value reused across links |
 | **Out-of-CIDR transit** | a `pinned_*_transit_ip` value is not inside the link's domain `transit_cidr` | reject: pinned transit address outside pool |
-| **Out-of-range port** | a `pinned_*_port` is `< 1` or `> 65535`, or below the node's base `listen_port` | reject: pinned port out of range |
-| **Stale base** | a pin references a pool that no longer applies — e.g. `transit_cidr` was narrowed so the pinned transit IP is now out of pool, or the node's `listen_port` base moved above the pinned port | reject: stale pin; operator must clear it to renumber (I7) |
-| **Partial pin** | for a single resource on one link, one end is pinned and the other is empty | reject: pins must be set as a complete pair |
-| **Client-edge pin** | an edge whose `from` or `to` is a `client`-role node carries `pinned_*_port` (clients use a single `wg0`, not per-peer listen ports — see [peer-derivation.md](peer-derivation.md)) | reject: client edges have no per-peer port pins |
+| **Out-of-range port** | a non-zero `pinned_*_port` is `< 1024` or `> 65535` | reject: pinned port out of range |
+| **Stale pool** | a pin references a pool that no longer applies — e.g. `transit_cidr` was narrowed so the pinned transit IP is now out of pool | reject: stale pin; operator must clear it to renumber (I7) |
+| **Partial pin** | for transit/link-local on any link, or ports on an ordinary link, one end is pinned and the other is empty | reject: pins must be set as a complete pair |
+| **Client-endpoint port** | the `pinned_*_port` field attached to a `client` endpoint is non-zero | reject only that endpoint-local port; the opposite non-client port and complete address pairs remain valid |
 
-> **Compliance:** none of these checks exist today — there are no pins to validate
-> (`internal/validator/semantic.go`). Added with the pin fields in Plan 7. Stale-base detection
-> reuses the same idea the allocator already applies to overlay IPs (clearing an `overlay_ip` that
-> falls outside its domain CIDR, `internal/allocator/ip.go:32-49`), generalized to pins.
+> **Compliance:** `internal/validator/semantic_pins.go` applies these rules before allocation;
+> `internal/normalize/pins.go` performs the safe endpoint-local client-port migration and repairs
+> genuine cross-link collisions before the validator is reached on controller/browser load paths.
 
 ## Key persistence
 

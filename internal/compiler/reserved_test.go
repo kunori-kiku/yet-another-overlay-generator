@@ -7,10 +7,9 @@ import (
 )
 
 // TestBuildReservedFromExcludedEdges_SkipRules locks the reservation builder's exclusion rules:
-// an INCLUDED edge (in the subgraph), a DISABLED edge, and a CLIENT-touched edge each contribute
-// NO reservation; only the pins of an enabled, non-client, complete-pin EXCLUDED edge are reserved,
-// keyed by the resolved transit CIDR / node / value. (Same package so it reads the unexported sets
-// directly — no test-only accessors leak onto the production type.)
+// included and disabled edges contribute no reservation, while enabled excluded edges reserve
+// every live allocation. A client link contributes its non-client-side port plus its complete
+// transit/link-local pairs. (Same package so the test reads the unexported sets directly.)
 func TestBuildReservedFromExcludedEdges_SkipRules(t *testing.T) {
 	topo := &model.Topology{
 		Domains: []model.Domain{{ID: "domain-1", Name: "net", CIDR: "10.60.0.0/24"}},
@@ -26,9 +25,11 @@ func TestBuildReservedFromExcludedEdges_SkipRules(t *testing.T) {
 			// excluded + disabled -> not reserved
 			{ID: "dis", FromNodeID: "n1", ToNodeID: "n2", IsEnabled: false,
 				PinnedFromTransitIP: "10.10.0.3", PinnedToTransitIP: "10.10.0.4"},
-			// excluded + client-touched -> not reserved
+			// excluded + client link -> valid router-side port and address pairs are RESERVED
 			{ID: "cli", FromNodeID: "n3", ToNodeID: "n2", IsEnabled: true,
-				PinnedFromTransitIP: "10.10.0.5", PinnedToTransitIP: "10.10.0.6"},
+				PinnedToPort:        51832,
+				PinnedFromTransitIP: "10.10.0.5", PinnedToTransitIP: "10.10.0.6",
+				PinnedFromLinkLocal: "fe80::5", PinnedToLinkLocal: "fe80::6"},
 			// excluded + enabled + non-client + complete -> RESERVED
 			{ID: "res", FromNodeID: "n1", ToNodeID: "n2", IsEnabled: true,
 				PinnedFromPort: 51830, PinnedToPort: 51831,
@@ -41,21 +42,26 @@ func TestBuildReservedFromExcludedEdges_SkipRules(t *testing.T) {
 	const cidr = "10.10.0.0/24" // domain-1 has no transit_cidr -> default pool
 	transitReserved := func(ip string) bool { return r.transitIPs[cidr] != nil && r.transitIPs[cidr][ip] }
 
-	for _, ip := range []string{"10.10.0.7", "10.10.0.8"} {
+	for _, ip := range []string{"10.10.0.5", "10.10.0.6", "10.10.0.7", "10.10.0.8"} {
 		if !transitReserved(ip) {
-			t.Errorf("transit %s should be reserved (from excluded edge 'res')", ip)
+			t.Errorf("transit %s should be reserved (from an enabled excluded edge)", ip)
 		}
 	}
-	for _, ip := range []string{"10.10.0.1", "10.10.0.2", "10.10.0.3", "10.10.0.4", "10.10.0.5", "10.10.0.6"} {
+	for _, ip := range []string{"10.10.0.1", "10.10.0.2", "10.10.0.3", "10.10.0.4"} {
 		if transitReserved(ip) {
-			t.Errorf("transit %s should NOT be reserved (included / disabled / client edge)", ip)
+			t.Errorf("transit %s should NOT be reserved (included / disabled edge)", ip)
 		}
 	}
 	if !r.ports["n1"][51830] || !r.ports["n2"][51831] {
 		t.Errorf("ports 51830@n1 / 51831@n2 should be reserved (from excluded edge 'res')")
 	}
-	if !r.linkLocals["fe80::7"] || !r.linkLocals["fe80::8"] {
-		t.Errorf("link-locals fe80::7/::8 should be reserved (from excluded edge 'res')")
+	if !r.ports["n2"][51832] {
+		t.Errorf("router-side client-link port 51832@n2 should be reserved")
+	}
+	for _, ll := range []string{"fe80::5", "fe80::6", "fe80::7", "fe80::8"} {
+		if !r.linkLocals[ll] {
+			t.Errorf("link-local %s should be reserved (from an enabled excluded edge)", ll)
+		}
 	}
 }
 

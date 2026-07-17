@@ -88,8 +88,8 @@ type PeerAllocation struct {
 }
 
 // HealedEdge is one edge of the topology AFTER normalize.HealCollidingPins has run over a copy of
-// the fixture's input topology. It carries the edge identity plus the seven pin fields the heal
-// strips/keeps, so the FE heal canary (frontend/src/lib/heal.conformance.test.ts) can byte-compare
+// the fixture's input topology. It carries the edge identity, CompiledPort, and six pinned_* fields
+// the heal strips/keeps, so the FE heal canary (frontend/src/lib/heal.conformance.test.ts) can byte-compare
 // the FE healCollidingPins against the Go heal over the shared corpus. Edges are emitted SORTED by
 // ID so map/slice iteration order never reds the comparison.
 type HealedEdge struct {

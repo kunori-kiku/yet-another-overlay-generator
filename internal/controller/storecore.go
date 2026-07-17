@@ -9,6 +9,7 @@ package controller
 // impl that ships. Store is the public contract; a backend holds NO business rule.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -208,54 +209,98 @@ func (c *storeCore) PutTopology(ctx context.Context, t TenantID, jsonBytes []byt
 	}
 	var rec TopologyRecord
 	err := c.kv.withLock(func() error {
-		var prev TopologyRecord
-		var prevVersion int64
-		switch err := c.loadJSON(t, collTopology, "", &prev); {
-		case err == nil:
-			prevVersion = prev.Version
-		case errors.Is(err, ErrNotFound):
-			// no prior topology
-		default:
+		prev, err := c.loadTopologyForWriteLocked(t)
+		if err != nil {
 			return err
 		}
-		rec = TopologyRecord{
-			Version:   prevVersion + 1,
-			JSON:      append([]byte(nil), jsonBytes...),
-			UpdatedAt: time.Now().UTC(),
-		}
-		// Upgrade backfill: a deployment whose current topology predates the history feature has no
-		// history file for it; write it lazily so the displaced version stays recoverable. Use get
-		// (lock-free, in-lock) rather than the self-locking exists.
-		if prevVersion > 0 {
-			if _, err := c.kv.get(t, collTopoHistory, strconv.FormatInt(prevVersion, 10)); errors.Is(err, errKVNotFound) {
-				if err := c.saveJSON(t, collTopoHistory, strconv.FormatInt(prevVersion, 10), prev); err != nil {
-					return err
-				}
-			} else if err != nil {
-				return err
-			}
-		}
-		if err := c.saveJSON(t, collTopoHistory, strconv.FormatInt(rec.Version, 10), rec); err != nil {
-			return err
-		}
-		if err := c.saveJSON(t, collTopology, "", rec); err != nil {
-			return err
-		}
-		// Prune beyond the retention bound (best-effort — a leftover is re-pruned next put).
-		if cutoff := rec.Version - TopologyHistoryLimit; cutoff > 0 {
-			recs, err := c.kv.list(t, collTopoHistory)
-			if err == nil {
-				for _, r := range recs {
-					if v, perr := strconv.ParseInt(r.key, 10, 64); perr == nil && v <= cutoff {
-						_ = c.kv.del(t, collTopoHistory, r.key)
-					}
-				}
-			}
-		}
-		return nil
+		rec, err = c.putTopologyAfterLocked(t, prev, jsonBytes)
+		return err
 	})
 	if err != nil {
 		return TopologyRecord{}, err
+	}
+	return rec, nil
+}
+
+// CompareAndSetTopology is the allocation-writeback guard: checking the version and either
+// committing the next retained record or doing a byte-identical compare-only no-op occurs under one
+// backend lock. A concurrent Fleet save therefore wins intact and makes a stale deployment retry.
+func (c *storeCore) CompareAndSetTopology(ctx context.Context, t TenantID, expectedVersion int64, jsonBytes []byte) (TopologyRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return TopologyRecord{}, err
+	}
+	var rec TopologyRecord
+	err := c.kv.withLock(func() error {
+		prev, err := c.loadTopologyForWriteLocked(t)
+		if err != nil {
+			return err
+		}
+		if prev.Version != expectedVersion {
+			return ErrTopologyChanged
+		}
+		if bytes.Equal(prev.JSON, jsonBytes) {
+			rec = prev
+			return nil
+		}
+		rec, err = c.putTopologyAfterLocked(t, prev, jsonBytes)
+		return err
+	})
+	if err != nil {
+		return TopologyRecord{}, err
+	}
+	return rec, nil
+}
+
+// loadTopologyForWriteLocked returns a zero record when no current topology exists. The caller holds
+// the backend lock; keeping this separate lets unconditional and conditional writes share exactly the
+// same history/crash-ordering implementation.
+func (c *storeCore) loadTopologyForWriteLocked(t TenantID) (TopologyRecord, error) {
+	var prev TopologyRecord
+	if err := c.loadJSON(t, collTopology, "", &prev); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return TopologyRecord{}, nil
+		}
+		return TopologyRecord{}, err
+	}
+	return prev, nil
+}
+
+// putTopologyAfterLocked writes history before flipping the current record, preserving the existing
+// harmless-orphan crash shape. The caller holds the backend lock.
+func (c *storeCore) putTopologyAfterLocked(t TenantID, prev TopologyRecord, jsonBytes []byte) (TopologyRecord, error) {
+	rec := TopologyRecord{
+		Version:   prev.Version + 1,
+		JSON:      append([]byte(nil), jsonBytes...),
+		UpdatedAt: time.Now().UTC(),
+	}
+	// Upgrade backfill: a deployment whose current topology predates the history feature has no
+	// history file for it; write it lazily so the displaced version stays recoverable. Use get
+	// (lock-free, in-lock) rather than the self-locking exists.
+	if prev.Version > 0 {
+		if _, err := c.kv.get(t, collTopoHistory, strconv.FormatInt(prev.Version, 10)); errors.Is(err, errKVNotFound) {
+			if err := c.saveJSON(t, collTopoHistory, strconv.FormatInt(prev.Version, 10), prev); err != nil {
+				return TopologyRecord{}, err
+			}
+		} else if err != nil {
+			return TopologyRecord{}, err
+		}
+	}
+	if err := c.saveJSON(t, collTopoHistory, strconv.FormatInt(rec.Version, 10), rec); err != nil {
+		return TopologyRecord{}, err
+	}
+	if err := c.saveJSON(t, collTopology, "", rec); err != nil {
+		return TopologyRecord{}, err
+	}
+	// Prune beyond the retention bound (best-effort — a leftover is re-pruned next put).
+	if cutoff := rec.Version - TopologyHistoryLimit; cutoff > 0 {
+		recs, err := c.kv.list(t, collTopoHistory)
+		if err == nil {
+			for _, r := range recs {
+				if v, perr := strconv.ParseInt(r.key, 10, 64); perr == nil && v <= cutoff {
+					_ = c.kv.del(t, collTopoHistory, r.key)
+				}
+			}
+		}
 	}
 	return rec, nil
 }

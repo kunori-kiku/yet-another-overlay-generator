@@ -5,11 +5,16 @@
 // omitempty bookkeeping stays module-private to canonicalDesign.
 
 import type { ControllerState } from './types';
-import type { ControllerConfig } from '../../api/controllerClient';
+import { getSession, type ControllerConfig } from '../../api/controllerClient';
 import type { Topology } from '../../types/topology';
 import { localizeError as localizeErrorFor } from '../../lib/localizeError';
-import { useTopologyStore, ALLOCATION_PIN_FIELDS } from '../topologyStore';
+import { SERVER_ALLOCATION_FIELDS } from '../../lib/allocationFields';
+import { useTopologyStore } from '../topologyStore';
 import { t, type MessageKey, type TParams } from '../../i18n';
+import {
+  controllerPreservesSuccessorTelemetryPolicy,
+  requiresSuccessorTelemetryPolicy,
+} from '../../lib/deployPreview';
 
 // localizeError localizes a caught error at the live UI language via the shared localizer (a
 // ControllerError -> tError so no raw "<status> <JSON>" reaches the UI; else its message; else the
@@ -23,6 +28,23 @@ export function localizeError(err: unknown, fallbackKey: MessageKey): string {
 // derived from a caught error, so zh operators see translated strings instead of English literals.
 export function tLocal(key: MessageKey, params?: TParams): string {
   return t(useTopologyStore.getState().language, key, params);
+}
+
+// assertControllerCanWriteTopology is the single fail-closed guard around the old-controller
+// canonicalization boundary. Every whole-topology mutation calls it immediately before the write;
+// preview route presence and controller semver are intentionally not treated as schema evidence.
+export async function assertControllerCanWriteTopology(
+  topology: Pick<Topology, 'nodes'>,
+  config: ControllerConfig,
+): Promise<void> {
+  if (!requiresSuccessorTelemetryPolicy(topology)) return;
+  // Re-probe immediately before each successor-bearing mutation. A cached login capability can
+  // outlive an in-place controller rollback/restart; only this fresh authenticated response is safe
+  // evidence that the process about to receive update-topology preserves the successor schema.
+  const session = await getSession(config);
+  if (!session || !controllerPreservesSuccessorTelemetryPolicy(session.controllerCapabilities)) {
+    throw new Error(tLocal('controllerStore.successorTelemetryRequiresNewController'));
+  }
 }
 
 // loadSlices projects a Topology down to exactly the fields loadTopology consumes
@@ -75,6 +97,7 @@ const NODE_OMITEMPTY = [
   'hostname', 'platform', 'deployment_mode', 'overlay_ip', 'mtu', 'xdp_mode', 'mimic_egress_interface', 'router_id',
   'fixed_private_key', 'wireguard_private_key', 'wireguard_public_key', 'public_endpoints',
   'extra_prefixes', 'ssh_alias', 'ssh_host', 'ssh_port', 'ssh_user', 'ssh_key_path', 'telemetry_probes',
+  'telemetry_devices',
 ];
 const EDGE_OMITEMPTY = [
   'endpoint_host', 'endpoint_port', 'compiled_port', 'priority', 'weight', 'role', 'transport',
@@ -83,9 +106,11 @@ const EDGE_OMITEMPTY = [
 ];
 // PublicEndpoint nests inside node.public_endpoints; id/host/port are required, note is omitempty.
 const PUBLIC_ENDPOINT_OMITEMPTY = ['note'];
-// TelemetryProbe nests inside node.telemetry_probes. Its schedule defaults and ICMP's absent port are
-// encoded as zero values in Go and therefore disappear when the controller canonicalizes the topology.
-const TELEMETRY_PROBE_OMITEMPTY = ['port', 'interval_seconds', 'timeout_milliseconds'];
+// TelemetryProbe nests inside node.telemetry_probes. Its optional display name, typed destination
+// fields, URL status default, and schedule defaults disappear when empty/zero in Go's topology form.
+const TELEMETRY_PROBE_OMITEMPTY = [
+  'name', 'host', 'port', 'url', 'expected_status', 'interval_seconds', 'timeout_milliseconds',
+];
 
 // isEmptyVal mirrors Go's encoding/json `omitempty` "empty" definition: false, 0, "", nil,
 // and zero-length slices. (Empty objects/structs are NOT omitted by Go, and aren't dropped here.)
@@ -161,7 +186,7 @@ export function canonicalDesignIgnoringPins(t: Topology): string {
     ...t,
     edges: t.edges.map((e) => {
       const x = { ...e } as Record<string, unknown>;
-      for (const f of ALLOCATION_PIN_FIELDS) delete x[f];
+      for (const f of SERVER_ALLOCATION_FIELDS) delete x[f];
       return x as unknown as typeof e;
     }),
   };

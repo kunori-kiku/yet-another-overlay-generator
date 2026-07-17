@@ -1,10 +1,21 @@
 import { t, type UILanguage } from '../../i18n';
 import { uuid } from '../../lib/uuid';
+import {
+  DEFAULT_URL_EXPECTED_STATUS,
+  effectiveExpectedStatus,
+  probeDestinationInvalid,
+  probeDestinationMissing,
+  probeExpectedStatusInvalid,
+  telemetryProbeWithType,
+} from '../../lib/probeResults';
 import type { Node, TelemetryProbe } from '../../types/topology';
 
 const MAX_PROBES = 16;
 const DEFAULT_INTERVAL_SECONDS = 60;
 const DEFAULT_TIMEOUT_MILLISECONDS = 2000;
+const MAX_NAME_CODE_POINTS = 128;
+// Match Go unicode.IsPrint: letters, marks, numbers, punctuation, symbols, and ASCII space only.
+const PRINTABLE_NAME = /^[\p{L}\p{M}\p{N}\p{P}\p{S} ]*$/u;
 
 interface Props {
   node: Node;
@@ -13,9 +24,9 @@ interface Props {
   updateNode: (id: string, updates: Partial<Node>) => void;
 }
 
-// This is deliberately a closed policy editor, not a generic command or URL editor. The operator
-// may enter one IP address or DNS hostname, choose ICMP echo or one TCP port, and set bounded
-// scheduling values. The backend validates and signs the exact deployed policy.
+// This is a closed policy editor, not a generic request or command builder. The only HTTP shape is
+// one signed fixed GET with an exact expected code; methods, headers, bodies, auth, and redirects are
+// not configurable here.
 export function TelemetryProbeEditor({
   node,
   keystonePinned,
@@ -28,8 +39,8 @@ export function TelemetryProbeEditor({
   const replace = (next: TelemetryProbe[]) => {
     updateNode(node.id, { telemetry_probes: next.length ? next : undefined });
   };
-  const patchProbe = (id: string, patch: Partial<TelemetryProbe>) => {
-    replace(probes.map((probe) => (probe.id === id ? { ...probe, ...patch } : probe)));
+  const updateProbe = (id: string, update: (probe: TelemetryProbe) => TelemetryProbe) => {
+    replace(probes.map((probe) => (probe.id === id ? update(probe) : probe)));
   };
   const addProbe = () => {
     if (manual || probes.length >= MAX_PROBES) return;
@@ -76,9 +87,61 @@ export function TelemetryProbeEditor({
               </p>
             )}
 
-            {probes.map((probe) => {
+            {probes.map((probe, index) => {
+              const rawName = probe.name ?? '';
+              const nameInvalid = rawName !== rawName.trim() ||
+                Array.from(rawName).length > MAX_NAME_CODE_POINTS ||
+                !PRINTABLE_NAME.test(rawName);
+              const nameErrorID = `telemetry-probe-${probe.id}-name-error`;
+              const destinationMissing = probeDestinationMissing(probe);
+              const destinationInvalid = probeDestinationInvalid(probe);
+              const expectedStatusInvalid = probeExpectedStatusInvalid(probe);
+              const destinationHintID = `telemetry-probe-${index}-destination-hint`;
+              const destinationErrorID = `telemetry-probe-${index}-destination-error`;
+              const expectedStatusErrorID = `telemetry-probe-${index}-expected-status-error`;
               return (
-                <div key={probe.id} className="space-y-2 rounded border border-[var(--hairline)] p-2">
+                <div
+                  key={probe.id}
+                  className={`space-y-2 rounded border p-2 ${destinationInvalid || expectedStatusInvalid
+                    ? 'border-[var(--danger-border)] bg-[var(--danger-bg)]'
+                    : 'border-[var(--hairline)]'}`}
+                >
+                  <label className="block text-xs text-[var(--content-muted)]">
+                    {t(language, 'telemetryProbes.name')}
+                    <input
+                      type="text"
+                      value={rawName}
+                      autoComplete="off"
+                      placeholder={t(language, 'telemetryProbes.namePlaceholder')}
+                      onChange={(event) => updateProbe(probe.id, (current) => ({
+                        ...current,
+                        name: event.target.value || undefined,
+                      }))}
+                      onBlur={(event) => {
+                        const trimmed = event.target.value.trim();
+                        if (trimmed !== event.target.value) {
+                          updateProbe(probe.id, (current) => ({
+                            ...current,
+                            name: trimmed || undefined,
+                          }));
+                        }
+                      }}
+                      aria-invalid={nameInvalid || undefined}
+                      aria-describedby={nameInvalid ? nameErrorID : undefined}
+                      className={`mt-1 w-full rounded border bg-[var(--control)] px-2 py-1 text-xs ${nameInvalid
+                        ? 'border-[var(--danger-border)]'
+                        : 'border-[var(--hairline)]'}`}
+                    />
+                  </label>
+                  {nameInvalid && (
+                    <p id={nameErrorID} role="alert" className="text-xs text-[var(--danger)]">
+                      {t(language, 'telemetryProbes.nameInvalid')}
+                    </p>
+                  )}
+                  <p className="break-all text-xs text-[var(--content-muted)]">
+                    {t(language, 'telemetryProbes.id')}{' '}
+                    <span className="font-mono">{probe.id}</span>
+                  </p>
                   <div className="grid grid-cols-2 gap-2">
                     <label className="text-xs text-[var(--content-muted)]">
                       {t(language, 'telemetryProbes.type')}
@@ -86,36 +149,59 @@ export function TelemetryProbeEditor({
                         value={probe.type}
                         onChange={(event) => {
                           const type = event.target.value as TelemetryProbe['type'];
-                          patchProbe(probe.id, {
-                            type,
-                            port: type === 'tcp' ? (probe.port ?? 443) : undefined,
-                          });
+                          updateProbe(probe.id, (current) => telemetryProbeWithType(current, type));
                         }}
                         className="mt-1 w-full rounded border border-[var(--hairline)] bg-[var(--control)] px-2 py-1 text-xs"
                       >
                         <option value="icmp">{t(language, 'telemetryProbes.icmp')}</option>
                         <option value="tcp">{t(language, 'telemetryProbes.tcp')}</option>
+                        <option value="url">{t(language, 'telemetryProbes.url')}</option>
                       </select>
                     </label>
                     <label className="text-xs text-[var(--content-muted)]">
-                      {t(language, 'telemetryProbes.target')}
+                      {t(language, probe.type === 'url' ? 'telemetryProbes.urlTarget' : 'telemetryProbes.target')}
                       <input
-                        type="text"
-                        value={probe.host}
-                        maxLength={253}
+                        type={probe.type === 'url' ? 'url' : 'text'}
+                        value={probe.type === 'url' ? probe.url : probe.host}
+                        required
+                        maxLength={probe.type === 'url' ? 2048 : 253}
                         autoComplete="off"
                         spellCheck={false}
-                        placeholder={t(language, 'telemetryProbes.hostPlaceholder')}
-                        onChange={(event) => patchProbe(probe.id, { host: event.target.value })}
-                        className="mt-1 w-full rounded border border-[var(--hairline)] bg-[var(--control)] px-2 py-1 text-xs"
+                        aria-invalid={destinationInvalid}
+                        aria-describedby={destinationInvalid
+                          ? `${destinationErrorID} ${destinationHintID}`
+                          : destinationHintID}
+                        placeholder={t(language, probe.type === 'url'
+                          ? 'telemetryProbes.urlPlaceholder'
+                          : 'telemetryProbes.hostPlaceholder')}
+                        onChange={(event) => updateProbe(probe.id, (current) => current.type === 'url'
+                          ? { ...current, url: event.target.value }
+                          : { ...current, host: event.target.value })}
+                        className={`mt-1 w-full rounded border bg-[var(--control)] px-2 py-1 text-xs ${destinationInvalid
+                          ? 'border-[var(--danger-border)]'
+                          : 'border-[var(--hairline)]'}`}
                       />
                     </label>
                   </div>
-                  <p className="text-xs text-[var(--content-muted)]">
-                    {t(language, 'telemetryProbes.hostHint')}
+                  {destinationInvalid && (
+                    <p
+                      id={destinationErrorID}
+                      role="alert"
+                      data-testid="telemetry-probe-destination-error"
+                      className="text-xs text-[var(--danger)]"
+                    >
+                      {t(language, destinationMissing
+                        ? 'telemetryProbes.destinationRequired'
+                        : probe.type === 'url'
+                          ? 'telemetryProbes.urlInvalid'
+                          : 'telemetryProbes.hostInvalid')}
+                    </p>
+                  )}
+                  <p id={destinationHintID} className="text-xs text-[var(--content-muted)]">
+                    {t(language, probe.type === 'url' ? 'telemetryProbes.urlHint' : 'telemetryProbes.hostHint')}
                   </p>
 
-                  <div className={`grid gap-2 ${probe.type === 'tcp' ? 'grid-cols-3' : 'grid-cols-2'}`}>
+                  <div className={`grid gap-2 ${probe.type === 'icmp' ? 'grid-cols-2' : 'grid-cols-3'}`}>
                     {probe.type === 'tcp' && (
                       <label className="text-xs text-[var(--content-muted)]">
                         {t(language, 'telemetryProbes.port')}
@@ -125,11 +211,34 @@ export function TelemetryProbeEditor({
                           max={65535}
                           value={probe.port ?? 443}
                           onChange={(event) =>
-                            patchProbe(probe.id, {
-                              port: Number.parseInt(event.target.value, 10) || 1,
-                            })
+                            updateProbe(probe.id, (current) => current.type === 'tcp'
+                              ? { ...current, port: Number.parseInt(event.target.value, 10) || 1 }
+                              : current)
                           }
                           className="mt-1 w-full rounded border border-[var(--hairline)] bg-[var(--control)] px-2 py-1 text-xs"
+                        />
+                      </label>
+                    )}
+                    {probe.type === 'url' && (
+                      <label className="text-xs text-[var(--content-muted)]">
+                        {t(language, 'telemetryProbes.expectedStatus')}
+                        <input
+                          type="number"
+                          min={100}
+                          max={599}
+                          required
+                          value={effectiveExpectedStatus(probe)}
+                          aria-invalid={expectedStatusInvalid || undefined}
+                          aria-describedby={expectedStatusInvalid ? expectedStatusErrorID : undefined}
+                          onChange={(event) => updateProbe(probe.id, (current) => current.type === 'url'
+                            ? {
+                                ...current,
+                                expected_status: Number.parseInt(event.target.value, 10) || DEFAULT_URL_EXPECTED_STATUS,
+                              }
+                            : current)}
+                          className={`mt-1 w-full rounded border bg-[var(--control)] px-2 py-1 text-xs ${expectedStatusInvalid
+                            ? 'border-[var(--danger-border)]'
+                            : 'border-[var(--hairline)]'}`}
                         />
                       </label>
                     )}
@@ -142,10 +251,11 @@ export function TelemetryProbeEditor({
                         value={probe.interval_seconds ?? DEFAULT_INTERVAL_SECONDS}
                         onChange={(event) => {
                           const value = Number.parseInt(event.target.value, 10);
-                          patchProbe(probe.id, {
+                          updateProbe(probe.id, (current) => ({
+                            ...current,
                             interval_seconds:
                               !Number.isFinite(value) || value === DEFAULT_INTERVAL_SECONDS ? undefined : value,
-                          });
+                          }));
                         }}
                         className="mt-1 w-full rounded border border-[var(--hairline)] bg-[var(--control)] px-2 py-1 text-xs"
                       />
@@ -159,15 +269,21 @@ export function TelemetryProbeEditor({
                         value={probe.timeout_milliseconds ?? DEFAULT_TIMEOUT_MILLISECONDS}
                         onChange={(event) => {
                           const value = Number.parseInt(event.target.value, 10);
-                          patchProbe(probe.id, {
+                          updateProbe(probe.id, (current) => ({
+                            ...current,
                             timeout_milliseconds:
                               !Number.isFinite(value) || value === DEFAULT_TIMEOUT_MILLISECONDS ? undefined : value,
-                          });
+                          }));
                         }}
                         className="mt-1 w-full rounded border border-[var(--hairline)] bg-[var(--control)] px-2 py-1 text-xs"
                       />
                     </label>
                   </div>
+                  {expectedStatusInvalid && (
+                    <p id={expectedStatusErrorID} role="alert" className="text-xs text-[var(--danger)]">
+                      {t(language, 'telemetryProbes.expectedStatusInvalid')}
+                    </p>
+                  )}
 
                   <button
                     type="button"

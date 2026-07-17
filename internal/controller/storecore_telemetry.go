@@ -10,6 +10,7 @@ package controller
 // DesiredGeneration/keys, which stay on the durable write path.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -36,6 +37,10 @@ type volatileTelemetry struct {
 	// sequenceCursors bounds exact-retry suppression to the most recently observed agent boots.
 	// It is intentionally volatile: making it durable would add a write/fsync to every heartbeat.
 	sequenceCursors map[string]telemetrySequenceCursor
+	// retiredBoots remembers a second bounded tier of evicted cursor identities. It lets a genuinely
+	// new restart win by receipt inside the clock-skew window without mistaking a delayed evicted boot
+	// for that restart. Values are last receipt times used only for deterministic bounded eviction.
+	retiredBoots map[string]time.Time
 	// activeBootID prevents a delayed sample from a known retired agent process from replacing live
 	// state produced by its successor. activeSampledAt helps identify a previously unseen stale boot.
 	activeBootID    string
@@ -53,6 +58,7 @@ type telemetrySequenceCursor struct {
 // requests without turning telemetry into an unbounded memory surface.
 const (
 	maxTelemetrySequenceCursors = 4
+	maxTelemetryRetiredBoots    = 8
 	maxTelemetryReplayAge       = 24 * time.Hour
 	maxTelemetryFutureSkew      = 5 * time.Minute
 	telemetryBootStaleSlack     = 5 * time.Minute
@@ -180,16 +186,42 @@ func (c *storeCore) RecordTelemetry(ctx context.Context, t TenantID, nodeID stri
 	c.telemetryMu.Lock()
 	defer c.telemetryMu.Unlock()
 	ent := c.telemetryEntryLocked(t, nodeID)
+	// An accepted unsequenced heartbeat that changes the capability advertisement is a live
+	// replacement boundary. Retire the previously active boot before replacing its map so a delayed
+	// higher-sequence replay from that old process can still contribute history/liveness but cannot
+	// restore executable-policy readiness. A header-stripped v2 heartbeat carries the same canonical
+	// capability body and deliberately keeps ownership, preserving safe proxy degradation.
+	_, currentCapabilities := ent.telemetry[telemetrymetric.AgentCapabilitiesKey]
+	_, incomingCapabilities := metrics[telemetrymetric.AgentCapabilitiesKey]
+	capabilityReplacement := !incomingCapabilities ||
+		(currentCapabilities && !sameAgentCapabilityAdvertisement(ent.telemetry, metrics))
+	if ent.telemetrySet && !observedAt.Before(ent.writtenAt) && ent.activeBootID != "" &&
+		capabilityReplacement {
+		previousAt := ent.activeSampledAt
+		if previous, ok := ent.sequenceCursors[ent.activeBootID]; ok && !previous.lastReceivedAt.IsZero() {
+			previousAt = previous.lastReceivedAt
+		}
+		rememberRetiredTelemetryBoot(ent, ent.activeBootID, previousAt)
+		ent.activeBootID = ""
+		ent.activeSampledAt = time.Time{}
+	}
 	c.recordTelemetryLocked(t, nodeID, ent, conditions, metrics, agentVersion, observedAt, observedAt, 0)
 	return nil
+}
+
+func sameAgentCapabilityAdvertisement(current, next map[string]json.RawMessage) bool {
+	currentRaw, currentOK := current[telemetrymetric.AgentCapabilitiesKey]
+	nextRaw, nextOK := next[telemetrymetric.AgentCapabilitiesKey]
+	return currentOK == nextOK && (!currentOK || bytes.Equal(currentRaw, nextRaw))
 }
 
 // RecordTelemetrySequenced acknowledges and records one reliable telemetry sample. The cursor key is
 // (node identity from bearer auth, agent boot id); sequence values are monotonic within that boot. An
 // already-acknowledged sequence proves the node reached us now (so LastSeen may advance) but must not
 // overwrite newer live metrics or append duplicate history. receivedAt, not the node clock, remains
-// authoritative for LastSeen and condition ObservedAt. sampledAt is used only for the observation's
-// history timestamp so a bounded replay reconstructs the sampling timeline instead of an arrival burst.
+// authoritative for LastSeen and condition ObservedAt. Bounded sampledAt timestamps history so replay
+// reconstructs the sampling timeline and helps arbitrate stale or ambiguous cross-boot live-overlay
+// ownership; it never establishes liveness.
 func (c *storeCore) RecordTelemetrySequenced(ctx context.Context, t TenantID, nodeID string, conditions []runtimecontract.Condition, metrics map[string]json.RawMessage, agentVersion, bootID string, sequence uint64, sampledAt time.Time, interval time.Duration, receivedAt time.Time) (TelemetryReceipt, error) {
 	sampledAt = sampledAt.UTC()
 	receivedAt = receivedAt.UTC()
@@ -237,20 +269,33 @@ func (c *storeCore) RecordTelemetrySequenced(ctx context.Context, t TenantID, no
 
 	cursor, seen := ent.sequenceCursors[bootID]
 	historyAt, sampledAtTrusted := normalizeTelemetrySampleTime(sampledAt, receivedAt)
-	live := ent.activeBootID == "" || ent.activeBootID == bootID
-	if ent.activeBootID != "" && ent.activeBootID != bootID {
+	_, retiredBoot := ent.retiredBoots[bootID]
+	live := !retiredBoot && (ent.activeBootID == "" || ent.activeBootID == bootID)
+	crossBoot := ent.activeBootID != "" && ent.activeBootID != bootID
+	ambiguousCrossBoot := crossBoot && (!sampledAtTrusted ||
+		(!ent.activeSampledAt.IsZero() && !sampledAt.After(ent.activeSampledAt)))
+	if crossBoot {
 		switch {
+		case retiredBoot:
+			live = false
 		case seen:
-			// A cursor can become "retired" only because a delayed, previously evicted
-			// boot landed inside the restart-skew window. Let the known current boot
-			// reclaim the live overlay once it supplies a newer trusted sample; otherwise
-			// one delayed request could strand the node on stale live state indefinitely.
+			// A cursor can become "retired" only because a delayed, previously evicted boot landed
+			// inside the restart-skew window. Let the known current boot reclaim the live overlay once
+			// it supplies a newer trusted sample.
 			live = sampledAtTrusted && (ent.activeSampledAt.IsZero() || sampledAt.After(ent.activeSampledAt))
 		case sampledAtTrusted && !ent.activeSampledAt.IsZero() && sampledAt.Before(ent.activeSampledAt.Add(-telemetryBootStaleSlack)):
 			live = false
 		default:
+			// A previously unseen boot inside the bounded skew window is a restart. Receipt order is
+			// authoritative for live state; the agent clock remains advisory history metadata.
 			live = true
 		}
+	}
+	if ambiguousCrossBoot && ent.telemetrySet {
+		// Capability readiness fails closed at every ambiguous restart boundary, even if the sample
+		// is too old to replace the rest of the live overlay. This prevents a downgraded new process
+		// (or a delayed evicted process) from inheriting another boot's executable-support claim.
+		delete(ent.telemetry, telemetrymetric.AgentCapabilitiesKey)
 	}
 	if seen && !cursor.lastSampledAt.IsZero() && sampledAt.Before(cursor.lastSampledAt) {
 		historyAt = receivedAt
@@ -260,7 +305,8 @@ func (c *storeCore) RecordTelemetrySequenced(ctx context.Context, t TenantID, no
 	}
 
 	if !seen && len(ent.sequenceCursors) >= maxTelemetrySequenceCursors {
-		evictOldestTelemetryCursor(ent.sequenceCursors, ent.activeBootID)
+		retiredID, retiredAt := evictOldestTelemetryCursor(ent.sequenceCursors, ent.activeBootID)
+		rememberRetiredTelemetryBoot(ent, retiredID, retiredAt)
 	}
 	cursor.highestSequence = sequence
 	if cursor.lastSampledAt.IsZero() || sampledAt.After(cursor.lastSampledAt) {
@@ -276,11 +322,27 @@ func (c *storeCore) RecordTelemetrySequenced(ctx context.Context, t TenantID, no
 		ent.lastSeenSet = true
 	}
 	if live {
+		if crossBoot {
+			previousBootID := ent.activeBootID
+			previousAt := ent.activeSampledAt
+			if previous, ok := ent.sequenceCursors[previousBootID]; ok && !previous.lastReceivedAt.IsZero() {
+				previousAt = previous.lastReceivedAt
+			}
+			// A boot generation that has been superseded must never reauthorize itself merely by
+			// presenting a later advisory wall-clock sample. Remember it independently of cursor
+			// eviction so receipt-ordered restart semantics remain monotonic.
+			rememberRetiredTelemetryBoot(ent, previousBootID, previousAt)
+		}
 		ent.activeBootID = bootID
 		if ent.activeSampledAt.IsZero() || historyAt.After(ent.activeSampledAt) {
 			ent.activeSampledAt = historyAt
 		}
-		c.recordTelemetryLocked(t, nodeID, ent, conditions, metrics, agentVersion, receivedAt, historyAt, interval)
+		liveMetrics := metrics
+		if ambiguousCrossBoot {
+			liveMetrics = cloneMetrics(metrics)
+			delete(liveMetrics, telemetrymetric.AgentCapabilitiesKey)
+		}
+		c.recordTelemetryLocked(t, nodeID, ent, conditions, liveMetrics, agentVersion, receivedAt, historyAt, interval)
 	} else {
 		c.appendTelemetryHistoryLocked(t, nodeID, metrics, historyAt, interval)
 	}
@@ -317,12 +379,12 @@ func (c *storeCore) recordTelemetryLocked(t TenantID, nodeID string, ent *volati
 		ent.lastSeen = observedAt
 		ent.lastSeenSet = true
 	}
+	// History is observation-time data, not latest-state data. Append every accepted, non-duplicate
+	// sample exactly once even when a concurrent newer /report owns the live overlay. Keeping this
+	// outside writtenAt prevents an acknowledged reliable sample from being permanently lost.
+	c.appendTelemetryHistoryLocked(t, nodeID, metrics, historyAt, interval)
 	if !ent.telemetrySet || !observedAt.Before(ent.writtenAt) { // observedAt >= writtenAt
 		ent.conditions = stampConditions(conditions, observedAt)
-		// The full admitted map reaches history before history-only transport windows are removed from
-		// latest state. Both operations are memory-only and run under the existing freshness gate.
-		// History owns a separate mutex; the established lock order is telemetryMu then history.mu.
-		c.appendTelemetryHistoryLocked(t, nodeID, metrics, historyAt, interval)
 		ent.telemetry = cloneLiveMetrics(metrics)
 		ent.telemetrySet = true
 		ent.writtenAt = observedAt
@@ -336,7 +398,7 @@ func (c *storeCore) appendTelemetryHistoryLocked(t TenantID, nodeID string, metr
 	c.history.appendMetrics(t, nodeID, metrics, historyAt, interval)
 }
 
-func evictOldestTelemetryCursor(cursors map[string]telemetrySequenceCursor, protectedBootID string) {
+func evictOldestTelemetryCursor(cursors map[string]telemetrySequenceCursor, protectedBootID string) (string, time.Time) {
 	var oldestID string
 	var oldestAt time.Time
 	for bootID, cursor := range cursors {
@@ -352,6 +414,29 @@ func evictOldestTelemetryCursor(cursors map[string]telemetrySequenceCursor, prot
 	if oldestID != "" {
 		delete(cursors, oldestID)
 	}
+	return oldestID, oldestAt
+}
+
+func rememberRetiredTelemetryBoot(ent *volatileTelemetry, bootID string, at time.Time) {
+	if ent == nil || bootID == "" {
+		return
+	}
+	if ent.retiredBoots == nil {
+		ent.retiredBoots = make(map[string]time.Time)
+	}
+	if _, exists := ent.retiredBoots[bootID]; !exists && len(ent.retiredBoots) >= maxTelemetryRetiredBoots {
+		var oldestID string
+		var oldestAt time.Time
+		for candidateID, candidateAt := range ent.retiredBoots {
+			if oldestID == "" || candidateAt.Before(oldestAt) ||
+				(candidateAt.Equal(oldestAt) && candidateID < oldestID) {
+				oldestID = candidateID
+				oldestAt = candidateAt
+			}
+		}
+		delete(ent.retiredBoots, oldestID)
+	}
+	ent.retiredBoots[bootID] = at
 }
 
 // TouchLastSeen records that the agent for nodeID checked in — to the in-memory overlay ONLY (no
@@ -384,7 +469,7 @@ func (c *storeCore) QueryTelemetryHistory(ctx context.Context, t TenantID, nodeI
 	return c.history.queryContext(ctx, t, nodeID, from, to)
 }
 
-// QueryTelemetryProbeHistory returns completed typed ICMP/TCP attempts within [from, to], sorted and
+// QueryTelemetryProbeHistory returns completed typed ICMP/TCP/URL attempts within [from, to], sorted and
 // exact-deduplicated across reliable retries, overlapping probe_samples windows, the rc.9 latest-result
 // fallback, and disk/inflight visibility overlap. Retention and tenant custody are shared with resource
 // history; no live metric or destination crosses tenant boundaries.
@@ -392,15 +477,16 @@ func (c *storeCore) QueryTelemetryProbeHistory(ctx context.Context, t TenantID, 
 	return c.history.queryProbesContext(ctx, t, nodeID, from, to)
 }
 
-// QueryTelemetryHistorySnapshot returns the resource and active-probe projections from one coherent
-// merge of durable, in-flight, and buffered history. The node-history endpoint uses this combined
-// query so each refresh performs only one JSONL scan.
+// QueryTelemetryHistorySnapshot returns the legacy resource and all-active-probe projections from one
+// coherent merge of durable, in-flight, and buffered history. Device history remains exact-only and
+// therefore requires the filtered method below.
 func (c *storeCore) QueryTelemetryHistorySnapshot(ctx context.Context, t TenantID, nodeID string, from, to time.Time) (TelemetryHistorySnapshot, error) {
 	return c.history.querySnapshotContext(ctx, t, nodeID, from, to)
 }
 
-// QueryTelemetryHistorySnapshotFiltered is the selector-pushdown form used by the API when it needs
-// resources plus either no probe series or one exact series. The legacy snapshot remains all-probes.
+// QueryTelemetryHistorySnapshotFiltered is the selector-pushdown form used by the API for resources,
+// optional legacy all-probes or one exact probe, and at most one exact device series. No broad device
+// mode exists, so a browser cannot materialize every retained disk/GPU series in one query.
 func (c *storeCore) QueryTelemetryHistorySnapshotFiltered(ctx context.Context, t TenantID, nodeID string, from, to time.Time, options TelemetryHistoryQueryOptions) (TelemetryHistorySnapshot, error) {
 	return c.history.querySnapshotFilteredContext(ctx, t, nodeID, from, to, options)
 }

@@ -98,6 +98,11 @@ order. The verifying key is chosen by policy:
      (back-compatible). When a key **is** pinned, an unsigned bundle is **refused**.
 2. Recompute each shipped file's SHA-256 and confirm it matches the signed `checksums.sha256` entry;
    `install.sh` must be present and covered.
+3. Treat `telemetry.json` and `telemetry-policy.json` as mutually exclusive executable policy
+   members. Either member, when present, must be checksum-covered. Candidate preparation then
+   strictly parses and canonicalizes that one member before membership verification, self-update,
+   bundle materialization, `PendingApply`, or any root-side action; a dual-member, malformed, or
+   non-canonicalizable candidate is refused.
 
 Any mismatch — bad signature, a **pinned-but-unsigned** bundle, or a file whose digest does not match
 — is a **hard refusal**: the agent aborts before touching `/etc/wireguard`. (Inside `install.sh`, a
@@ -166,6 +171,15 @@ exits. The real installer closes the inherited descriptor, preventing a service 
 retaining the lease indefinitely. Windows root apply is refused before mutation because its
 `LockFileEx` ownership cannot be transferred with the same guarantee; portable `kit verify`, key
 generation, and release-inspection commands remain available.
+
+Any active telemetry member additionally requires the independently configured off-host operator
+credential; bundle-supplied material cannot authorize it. The launcher removes inherited telemetry
+capability markers and exposes only capabilities implemented by the running binary. A successor
+install script checks `telemetry-policy-v2` plus the exact URL/device feature markers it needs before
+normal host configuration mutation, so an old agent fails closed while a signed self-update can be
+deployed first. Only a fully successful apply commits the canonical candidate as active policy. A
+failed candidate keeps the prior last-known-good policy; a successful omission or uninstall clears
+it.
 
 ### 6. report
 
@@ -313,7 +327,7 @@ pull→verify→anti-rollback→apply→report core as static-source mode — on
    into the `map[string][]byte` the verify+stage core expects — exactly the shape `DirSource`/`HTTPSource`
    return (it also records `lastFetchedGen`, the bundle's own generation, for the report). A **404**
    ([controller-api.md](controller-api.md) §`GET /config`) means "no bundle promoted for this node yet" —
-   e.g. a node enrolled but not in the current deploy's enrolled subgraph (render-what's-ready). `Fetch`
+   e.g. an enrolled node excluded from the current deploy's ready subgraph (render-what's-ready). `Fetch`
    surfaces it as an error, which the cycle treats as **keep-last-good**: the running overlay is untouched
    and a daemon keeps polling; it is not a corruption or auth failure.
 3. **Verify (fail-closed) — reused verbatim.** The fetched files go through the **same**
@@ -397,7 +411,7 @@ addition is the loop and the fetched-generation cursor. A production deployment 
 process supervisor (systemd) so a hard crash still restarts; `--daemon` is the in-process near-real-time
 path, the supervisor is the crash-recovery backstop.
 
-### Reliable telemetry and signed active probes
+### Reliable telemetry and signed active policy
 
 Daemon telemetry remains a separate authenticated `POST /telemetry` heartbeat; it never advances
 deployment state. Sampling and upload are decoupled through a 32-sample volatile queue, so a short
@@ -407,12 +421,32 @@ body. Retryable failures retain the sample with bounded backoff, and exact ackno
 The queue is intentionally not custody state and is lost on restart. See
 [../operations/telemetry-history.md](../operations/telemetry-history.md).
 
-After a verified apply commits a signed `telemetry.json`, the active-probe sampler may run the bounded
-ICMP/TCP policy. It performs no network I/O in the heartbeat collection call: due attempts run
-asynchronously, at most four at once, with no overlap per probe and bounded DNS fan-out. A failed apply
-keeps the prior policy; a verified omission/uninstall clears it. ICMP uses raw sockets directly and
-reports `permission_denied` when unavailable; it never shells out to `ping` or installs a dependency.
-The complete authorization and result contract is
+The frozen version-1 `telemetry.json` member carries only ICMP/TCP probes. Successor URL probes and
+automatic devices use the separately named version-2 `telemetry-policy.json`; a bundle may contain
+one policy member, never both. The sampler performs no probe network I/O in the heartbeat collection
+call: due attempts run asynchronously, at most four at once, with no overlap per probe and bounded
+DNS fan-out. ICMP uses raw sockets directly and reports `permission_denied` when unavailable; it
+never shells out to `ping` or installs a dependency. TCP uses the standard library. URL checks use a
+fixed `GET`, do not follow redirects or inherit an ambient proxy, and use the ordinary Go TLS trust
+model. Matching the configured expected status (default 200) determines availability. The observed
+status code is useful live context but is not charted; completed latency and success/failure flow
+through the shared probe history path.
+
+The signed `telemetry_devices: {mode: "all-eligible-v1"}` opt-in starts a bounded automatic collector;
+there is no hand-authored device list. Linux discovers eligible block devices and mounted
+filesystems from kernel interfaces, NVIDIA GPUs through a bounded trusted `nvidia-smi` query when
+available, and AMD GPU readings from the `amdgpu` sysfs interface. Other display-class devices can
+still report an explicit unsupported/provider status. Non-Linux portable builds report an empty
+collection rather than inventing support. Inventory, labels, capacity, relationships, and provider
+status are live-only categorical context. Stable opaque series IDs key the charted filesystem-used,
+disk read/write rate, disk-I/O-busy, GPU-utilization, and GPU-VRAM-used measurements. An unavailable
+measurement is a chart gap; a genuine measured zero remains zero.
+
+Latest probe/device values remain in the backward-compatible metrics map. Recent completed probe
+attempts are added only after a reliable v2 controller advertises `probe-samples-v1`; loss of that
+receipt capability immediately restores the legacy shape. Probe and device completion notifications
+may coalesce an early collection, but all uploads still use the one bounded replay queue and
+authenticated HTTP heartbeat. The complete authorization, scheduler, result, and history contract is
 [../operations/active-telemetry.md](../operations/active-telemetry.md).
 
 ### Anti-rollback in controller mode (honest)

@@ -1,6 +1,6 @@
 # Controller HTTP API
 
-<!-- last-verified: 2026-07-15 -->
+<!-- last-verified: 2026-07-17 -->
 
 This document describes the controller's current network boundary. `yaog-server` is a
 controller-only binary with separate operator/panel and agent listeners. Both listeners speak plain
@@ -85,6 +85,13 @@ operations can still use break-glass.
 session. Passwordless login uses a single-use server challenge. The server rate-limits login attempts
 by username and source IP.
 
+Every successful password or passkey login response, and the authenticated `GET /session` response,
+also carries the additive `controller_capabilities` list. A controller that understands the
+successor telemetry topology fields advertises the exact `telemetry-policy-v2-topology` token. The
+panel treats an absent token as an older controller and refuses to write a topology containing URL
+probes or automatic-device policy, rather than allowing an old canonicalizer to silently discard
+those fields.
+
 ### WebAuthn enrollment compatibility
 
 New browser login-passkey and browser keystone credentials use the authenticated
@@ -104,7 +111,7 @@ claimed.
 ## Route inventory
 
 The optional audience prefix is omitted below. Registration is authoritative in
-`internal/api/routes_controller.go:231-350`.
+`RegisterAgentRoutes` and `RegisterOperatorRoutes` (`internal/api/routes_controller.go:244-365`).
 
 ### Agent listener: `/api/v1/agent/`
 
@@ -114,7 +121,7 @@ The optional audience prefix is omitted below. Registration is authoritative in
 | `GET` | `bootstrap` | None | Return the generic install/enroll script; the operator supplies the enrollment token as a flag. |
 | `GET` | `config` | Node bearer | Return the caller's promoted bundle and rekey flag. |
 | `GET` | `poll?after=N` | Node bearer | Wait for a generation greater than `N`; timeout/cancellation returns 204. |
-| `POST` | `report` | Node bearer | Record the caller's applied generation/checksum/health and curated conditions. |
+| `POST` | `report` | Node bearer | Update the caller's applied generation/checksum/health and curated Fleet state. |
 | `POST` | `telemetry` | Node bearer | Record live conditions/metrics without changing deployment state. |
 | `POST` | `rekey` | Node bearer | Register the caller's replacement WireGuard public key. |
 
@@ -122,6 +129,15 @@ The optional audience prefix is omitted below. Registration is authoritative in
 short-lived, single-use node-scoped token and a pre-body per-IP limiter; bootstrap contains public
 configuration and public trust material only. See [controller-agent-api.md](../../../specs/controller-agent-api.md)
 for their detailed state transitions.
+
+`POST /report` is authenticated deployment/Fleet state, but it is not a durable security/operator
+audit event. Apply failures and retries can report every few seconds, so the controller updates the
+node's applied generation, checksum, health, version, conditions, and last-seen without appending a
+content-free `report` row to the hash chain. `POST /telemetry` remains the higher-frequency volatile
+observability path and likewise does not append audit entries. Older controllers did append
+`action:"report"`; those legacy rows remain part of the raw `GET /audit` response and hash-chain
+verification. The panel verifies the complete raw chain first, then hides only those legacy report
+rows from the operator-facing table.
 
 #### Reliable `POST /telemetry` extension
 
@@ -139,11 +155,17 @@ remains compatible with a new controller:
 
 On success the controller echoes protocol/boot ID, the **exact submitted sequence** in
 `X-YAOG-Telemetry-Ack-Sequence`, and its receipt time. A duplicate may additionally carry
-`X-YAOG-Telemetry-Duplicate: true`. The JSON response remains `{ "status": "ok" }`.
+`X-YAOG-Telemetry-Duplicate: true`. A reliable receipt may advertise additive behavior through
+`X-YAOG-Telemetry-Capabilities`; the current `probe-samples-v1` token is the sole authority for the
+agent to add its bounded recent-attempt window. The JSON response remains `{ "status": "ok" }`.
 
 Receipt time, never the node clock, controls `LastSeen` and live condition age. A bounded sample time
-is used only for resource history. Sequence cursors and live telemetry are volatile so a heartbeat
-never rewrites/fsyncs the node record. See
+may place resource, probe, and device measurements in retained history without allowing an agent
+clock to escape the accepted window. Sequence cursors and live telemetry are volatile so a heartbeat
+never rewrites/fsyncs the node record. The extensible metrics map carries the agent's currently
+authenticated capability set, latest probe results, negotiated recent probe attempts, and live
+device inventory/samples; the catalog decides which values have chart history and which are
+intentionally live-only. See
 [../operations/telemetry-history.md](../operations/telemetry-history.md) for queue, retry, deduplication,
 cadence, and intermediary-header-stripping behavior; authenticated live `probe_results` for a signed
 policy are defined in
@@ -164,7 +186,7 @@ Every remaining operator endpoint goes through `operatorAuth`:
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `logout` | Revoke the presented session and expire cookies. |
-| `GET` | `session` | Return current actor/session metadata, CSRF token, and controller version. |
+| `GET` | `session` | Return current actor/session metadata, CSRF token, controller version, and additive controller capabilities. |
 | `GET` | `totp/status` | Read the named account's TOTP state. |
 | `POST` | `totp/enroll`, `totp/confirm`, `totp/disable` | Manage the named account's TOTP factor. |
 | `GET` | `passkey/status` | Read the named account's login-passkey state. |
@@ -172,8 +194,8 @@ Every remaining operator endpoint goes through `operatorAuth`:
 | `POST` | `passkey/register`, `passkey/disable` | Manage the named account's login passkey. |
 | `POST` | `update-topology` | Canonicalize and version a private-key-free topology. |
 | `POST` | `compile-preview` | Compile the current design's admitted subgraph without writes. |
-| `POST` | `deploy-preview` | Report which nodes an unforced deploy would restage. |
-| `POST` | `stage` | Compile/export/stage the stored topology, optionally forcing nodes. |
+| `POST` | `deploy-preview` | Report which nodes an unforced deploy would restage; the optional `telemetry_policy_mode=upgrade-agents-first` query returns any node IDs whose successor policy is deliberately omitted. |
+| `POST` | `stage` | Compile/export/stage the stored topology, optionally forcing nodes or selecting `telemetry_policy_mode`; the response reports any successor-policy omissions. |
 | `POST` | `promote` | Promote the valid staged generation. |
 | `GET` | `nodes`, `node-history` | Read registry/live history projections. |
 | `GET` | `manual-node-bundle?node=ID` | Download a promoted manual-node bundle. |
@@ -206,9 +228,27 @@ intentional pre-auth surfaces.
 - Bundle files in `/config` are base64 values keyed by bundle-relative path. When keystone is on, the
   atomically read served snapshot also includes `trustlist.json` and `trustlist.sig`; those files are
   outside the bundle's own checksum set because the trust list binds that set's digest.
-- Probe-bearing preview/stage failures use the registered 412
-  `telemetry_probes_require_keystone` code; the controller never silently emits an unsigned active
-  network policy.
+- Deploy preview/stage of any ready-node active policy—probes or automatic-device collection—requires a
+  pinned keystone. Absence uses the historical registered 412
+  `telemetry_probes_require_keystone` code; the controller never silently emits unsigned active
+  telemetry policy.
+- A normal deploy of successor URL/device policy requires the latest exact capability advertisement
+  received from the node through authenticated telemetry. Missing capability returns registered 412
+  `telemetry_policy_upgrade_required`, with a bounded node list and total count. The explicit
+  `upgrade-agents-first` mode leaves the saved topology intact, emits legacy ICMP/TCP policy where
+  applicable, omits only successor fields from that deployment copy, and returns
+  `telemetry_policy_omitted_node_ids`. Covered nodes can receive the configured signed self-update;
+  uncovered nodes must be upgraded out of band. In either case, the operator waits until each affected
+  node has advertised the required capabilities before a normal deploy activates the retained policy.
+- A stale allocation write-back loses the topology compare-and-set and returns registered 409
+  `topology_changed`; it must not overwrite a newer Save. Invalid or colliding manual-node public
+  identity uses registered 422 `manual_node_invalid` rather than enrollment-skipped reporting.
+- Compiler schema/semantic failures from compile preview, deploy preview, and stage use the
+  registered 422 `topology_validation_failed` envelope with the first stable validator finding in
+  params. Validation is against the ready deployment subgraph, so an unfinished draft on an
+  unenrolled managed node does not block ready nodes. Operational storage/render/export faults remain
+  500. This distinction lets the panel block an incomplete ready-node telemetry draft without
+  offering the old-controller preview fallback.
 
 ## Structural invariants
 

@@ -7,7 +7,9 @@ import (
 	"testing"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/validator"
 )
 
 // TestMapControllerErr_Table is the perpetual guard on the central sentinel→code table
@@ -30,6 +32,7 @@ func TestMapControllerErr_Table(t *testing.T) {
 		{"node_revoked", controller.ErrNodeRevoked, apierr.CodeEnrollNodeRevoked, http.StatusConflict, ""},
 		{"invalid_wg_key", controller.ErrInvalidWGKey, apierr.CodeReqFieldInvalid, http.StatusBadRequest, "wg_public_key"},
 		{"duplicate_wg_key", controller.ErrDuplicateWGKey, apierr.CodeDuplicateWGKey, http.StatusConflict, ""},
+		{"topology_changed", controller.ErrTopologyChanged, apierr.CodeTopologyChanged, http.StatusConflict, ""},
 		{"telemetry_probes_require_keystone", controller.ErrTelemetryProbesRequireKeystone, apierr.CodeTelemetryProbesRequireKeystone, http.StatusPreconditionFailed, ""},
 	}
 	for _, tc := range cases {
@@ -81,6 +84,42 @@ func TestMapControllerErr_UnknownAndNil(t *testing.T) {
 	}
 	if ae := mapControllerErr(errors.New("some unrelated failure")); ae != nil {
 		t.Errorf("mapControllerErr(unknown) = %s, want nil", ae.Code())
+	}
+}
+
+func TestMapTopologyValidationErr(t *testing.T) {
+	source := &compiler.TopologyValidationError{
+		Phase: "schema",
+		Findings: []validator.ValidationError{{
+			Field:   "nodes[8].telemetry_probes",
+			Code:    string(validator.CodeNodeTelemetryProbesInvalid),
+			Params:  map[string]string{"detail": `probe "new" has invalid host ""`},
+			Message: `Node telemetry probe policy is invalid: probe "new" has invalid host ""`,
+			Level:   "error",
+		}},
+	}
+	for _, in := range []error{source, fmt.Errorf("compile subgraph: %w", source)} {
+		ae := mapTopologyValidationErr(in)
+		if ae == nil {
+			t.Fatalf("mapTopologyValidationErr(%v) = nil", in)
+		}
+		if ae.Code() != apierr.CodeTopologyValidationFailed || ae.Status() != http.StatusUnprocessableEntity {
+			t.Fatalf("mapped code/status = %q/%d, want %q/422", ae.Code(), ae.Status(), apierr.CodeTopologyValidationFailed)
+		}
+		params := ae.Params()
+		if params["field"] != "nodes[8].telemetry_probes" || params["validation_code"] != string(validator.CodeNodeTelemetryProbesInvalid) {
+			t.Fatalf("mapped finding params = %+v", params)
+		}
+		if params["validation_message"] != source.Findings[0].Message || params["validation_param_detail"] != source.Findings[0].Params["detail"] {
+			t.Fatalf("mapped localization params = %+v", params)
+		}
+		if !errors.Is(ae, source) {
+			t.Fatal("mapped validation error does not preserve its cause")
+		}
+	}
+
+	if ae := mapTopologyValidationErr(errors.New("disk gone")); ae != nil {
+		t.Fatalf("operational error mapped as topology validation: %v", ae)
 	}
 }
 

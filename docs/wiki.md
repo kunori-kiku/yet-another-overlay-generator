@@ -561,9 +561,12 @@ treats the node as changed and re-stages it, never skipping on doubt.
 
 **Pre-deploy preview.** The Deploy dialog shows a preview computed over your **current canvas** —
 "N updated, M unchanged" — as a read-only dry-run that **stages nothing**. It shares the exact skip
-decision and identity the real Deploy uses, so the count matches the actual outcome. If the preview
-can't be fetched (e.g. a newer panel talking to an older controller), the panel surfaces the error but
-still lets you **Deploy anyway** — the preview never hard-blocks a deploy.
+decision and identity the real Deploy uses, so the count matches the actual outcome. **Deploy anyway**
+is a narrow compatibility escape hatch: the panel offers it only when an older controller answers
+404/405 because the preview route itself is absent, and only for a legacy-v1-compatible topology.
+Structured validation, security, storage, operational, and network failures always block deployment.
+A topology containing successor policy (URL probes or automatic-device telemetry) also blocks the
+fallback, because an old controller cannot safely compile or enforce that policy.
 
 **Force redeploy.** You can override the skip: **Force redeploy** re-stages a node (or the whole fleet)
 even when unchanged, and a per-node **Force redeploy this node** sits on the node-detail page. Force is
@@ -574,14 +577,20 @@ re-stage so the signed trust-list re-pins every node.
 
 **Safety rails.** A Deploy that would empty the design or drop ≥ 50% of nodes requires typing the
 project name to confirm. The controller keeps the **last 10 topology versions** for recovery, and an
-append-only, hash-chained **audit log** records every enroll/revoke/stage/promote/rekey (the
-`/telemetry` heartbeat is deliberately *not* audited — a 30s beat would flood the chain).
+append-only, hash-chained **audit log** records meaningful operator/security events such as
+enroll/revoke/stage/promote/rekey. Routine authenticated `/report` and `/telemetry` updates change
+applied-generation/Fleet health state without appending durable audit rows. `report` rows written by
+older controllers remain in the raw API and hash chain for compatibility: the panel verifies the
+complete chain first, then hides only those legacy rows from the normal table. Nothing is deleted or
+rewritten.
 
 **Fleet-wide key rotation (Roll keys).** Rotation reuses the same model in four steps: (1) `rekey-all`
 flags every approved node and bumps the generation to *wake* parked agents; (2) each woken agent
 regenerates its private key and registers the new **public** key (skipping the stale woken bundle);
-(3) you wait for every "rotating keys" badge to clear (Deploy is disabled meanwhile); (4) one normal
-Deploy recompiles from the new public keys. The cost is a brief rolling per-link flap.
+(3) normally wait for every “rotating keys” badge to clear; (4) one normal Deploy recompiles from all
+new public keys. Deploying earlier is allowed behind an advisory confirmation and uses each node's
+currently registered key, but a straggler then needs another Deploy after it rotates (or explicit
+cancel-rekey if it will never return). The cost is a brief rolling per-link flap.
 
 ### 5.6 The node agent — pull, verify, apply
 
@@ -597,7 +606,8 @@ The agent (`cmd/agent`) is a thin, verify-then-apply wrapper over `install.sh`, 
 4. **apply** — on a verified, non-rolled-back bundle, the agent runs the bundle's own `install.sh`,
    which splices the locally-held private key into the placeholder in the copied configs (see
    [§8.3](#83-zero-knowledge-key-custody)).
-5. **report** — `POST /report` records the applied generation/checksum/health (best-effort).
+5. **report** — `POST /report` records the applied generation/checksum/health (best-effort) without
+   appending a routine durable audit event.
 
 Before step 4, the Linux agent durably records the exact candidate/action/trust anchors in a separate
 `PendingApply` write-ahead record while retaining the previous last-known-good state. Its
@@ -633,7 +643,7 @@ on a dedicated `POST /telemetry` heartbeat (default **30s**, set with the agent'
 conditions live, so the panel reflects *current* health instead of a frozen apply-time snapshot. It
 carries conditions plus an extensible `metrics` map and deliberately **never** touches the deploy
 custody fields (applied generation/checksum) — observability is strictly separate from deploy state,
-and the heartbeat is not audited.
+and neither this heartbeat nor routine `/report` state is appended to the durable audit chain.
 
 **Short interruptions use bounded replay, not a second transport.** The JSON body stays compatible
 with old controllers; optional protocol-v2 headers add a per-process boot ID, sequence, sample time,
@@ -677,9 +687,10 @@ averages. You pick a **time range** and **Resolution**; the server aggregates re
 into buckets (average / min / max per bucket) and **omits empty buckets** — a gap in the data (node
 offline, history just enabled) stays a gap on the chart, never a fabricated zero. Very fine steps are
 floored (≈ 1s), and a too-fine step over a large range is automatically widened so the chart stays
-bounded. One global 1000-bucket budget is shared by resource and selected-probe streams, and Fleet
-fetches only the exact probe currently selected, so a wide range transfers compact rollups instead of
-the full retained series. The effective step is echoed back, so the axis reflects what you got. With
+bounded. One global 1000-bucket budget is shared by resource, the exact selected probe, and the exact
+selected device series; Fleet does not fetch every probe or device merely to draw one graph. A wide
+range therefore transfers compact rollups instead of the full retained series. The effective step is
+echoed back, so the axis reflects what you got. With
 an explicit Resolution, Fleet also displays when the controller widened it to honor the global
 response budget; 24-hour and seven-day axes include dates rather than repeating ambiguous clock times.
 With
@@ -692,22 +703,44 @@ runs break the line rather than connecting through an outage.
 **Retention is configurable and byte-bounded.** A per-node record target in controller **Settings**
 bounds logical history; the default is ≈ 20160 records ≈ **7 days at the 30s heartbeat**. Setting it to
 **0 disables** history. An independent 128 MiB per-node file ceiling wins over the target for
-variable-width probe records; streaming compaction aims below it, and queries scan only the newest
+variable-width probe/device records; streaming compaction aims below it, and queries scan only the newest
 bounded suffix. History **never blocks the heartbeat** (a heartbeat never writes to disk). It is also
 never frozen: a just-deployed node's charts update promptly because the heartbeat is the single source
 and the agent nudges a fresh sample right after each apply.
 
-**Signed active telemetry.** In **Fleet**, open a node detail page to configure multiple ICMP echo or
-TCP-connect checks and see their latest results plus latency/availability history in the same place.
-Failures remain visible as attempted outages and are never plotted as zero-millisecond latency; a
-missing report remains a real gap. Each row has one required
-destination `host`, which may be an IP literal or DNS hostname; there is no separate or mandatory DNS
-field. TCP adds a required port. Saving updates the controller design draft, while **Deploy** is the
-separate signature/activation boundary. A probe-bearing deploy requires the pinned off-host keystone,
-and the agent repeats that membership gate before activation. DNS is resolved afresh by the node on
-each attempt. ICMP needs raw-socket privilege and reports a permission failure if unavailable; TCP and
-ICMP are implemented in-process, without a `ping`/`tcping` package. A future URL probe remains a
-separate typed feature. See [the active-telemetry spec](spec/operations/active-telemetry.md).
+**Signed active telemetry and automatic devices.** In **Fleet**, open a node detail page to configure
+multiple typed ICMP echo, TCP-connect, or HTTP(S) URL checks and see current results plus exact-series
+history in the same place. ICMP/TCP use one `host` accepting an IP literal or DNS hostname—there is no
+separate mandatory DNS field—and TCP adds a port. URL is a distinct type with an exact absolute URL and
+one expected status code (default 200). It performs one fixed GET, does not follow redirects, and
+compares the first response. The actual returned code is latest-result text, not a chart; a mismatch is
+a failed availability attempt but retains its measured latency. Latency and availability are charted,
+transport failures never fabricate zero latency, and a missing report remains a real gap.
+
+Saving updates the controller design draft; **Deploy** is the signature/activation boundary. Existing
+ICMP/TCP-only designs retain strict `telemetry.json` version 1 bytes. A URL or automatic-device policy
+uses the mutually exclusive signed `telemetry-policy.json` version 2 and requires the latest exact
+capability advertisement received from each affected agent through authenticated telemetry. Rolling
+upgrade is deliberately two deployments: choose **Upgrade agents
+first** to deploy an in-memory v1 projection while preserving the full saved draft. A configured signed
+rollout upgrades only covered nodes; absent or partial coverage is a non-blocking warning, and
+uncovered agents must be updated out of band. After every affected agent's latest advertisement
+contains the required exact capabilities, run a normal Deploy to activate the complete v2 policy. An
+incapable agent refuses before host mutation, and a failed candidate keeps the previous active policy. Every
+active-telemetry-policy deploy requires the pinned off-host keystone, and the agent repeats that
+membership gate before activation.
+
+The same Fleet page has an opt-in **Automatically discover eligible disks and GPUs** policy. On Linux,
+the agent discovers bounded block devices, mounted filesystems, and GPUs; NVIDIA readings use a fixed
+bounded `nvidia-smi` query, AMD uses documented sysfs metrics, and unavailable/unsupported providers
+remain explicit inventory states. Categorical `device_inventory` is live-only. Filesystem-used %, disk
+read/write throughput and busy %, GPU utilisation %, and VRAM-used % are numeric `device_samples` and
+reuse the shared history charts. Valid idle zero stays zero; missing/first/reset/unsupported readings
+stay chart gaps. Fleet queries only the selected `(kind, device_id)` series under the same global bucket
+budget. Live probe results, device inventory/readings, capability evidence, selections, and fetched
+history are excluded from browser persistence. ICMP uses in-process raw sockets and reports missing
+permission; TCP needs no `tcping` package. See
+[the active-telemetry spec](spec/operations/active-telemetry.md).
 
 **Fleet Live feedback.** Enabling **Live** performs an immediate refresh and then polls ten seconds
 after each completed request, so a slow controller cannot accumulate overlapping calls. The page shows
@@ -1190,7 +1223,7 @@ deploy, then unset). Keep the private key off the repo and protect it at rest (`
 Behind `operatorAuth` except the unauthenticated login surface. Highlights: `login` /
 `login/passkey/{begin,finish}` (unauth) / `logout` / `session`; `totp/*`, `passkey/*`;
 authenticated `webauthn/enrollment/begin` (purpose- and operator-scoped candidate proof);
-`update-topology`, `stage`, `compile-preview`, `promote`, `topology` (+ `?version=N`,
+`update-topology`, `stage`, `compile-preview`, `deploy-preview`, `promote`, `topology` (+ `?version=N`,
 `/topology/versions`); `nodes`, `revoke`, `audit`, `enrollment-token`, `rekey-all`, `clear-rekey`;
 `settings`, `release-pins`, `release-assets`; `operator-credential`, `trustlist`,
 `trustlist-signature`.
@@ -1199,8 +1232,10 @@ authenticated `webauthn/enrollment/begin` (purpose- and operator-scoped candidat
 
 Machine-to-machine JSON. `enroll` (no auth — single-use enrollment token) and `bootstrap` (no auth —
 generic installer) are open; `config`, `poll`, `report`, `telemetry`, `rekey` require the per-node
-bearer token. `telemetry` is observability-only (updates conditions + last-seen, never deploy custody)
-and is not audited.
+bearer token. `report` updates applied-generation/checksum state, while `telemetry` updates conditions,
+metrics, and last-seen without changing deploy custody; neither appends routine durable audit rows.
+Legacy `report` rows remain in the raw verified chain/API and are hidden only after full-chain
+verification in the normal audit table.
 
 > **Status codes:** 200 OK; 400 bad/empty body; 405 wrong method; 413 body over the 4 MiB cap; 422
 > structurally valid but fails to compile; 500 keygen/render/recovered-panic. Errors use the nested
@@ -1319,7 +1354,7 @@ cat /etc/wireguard/agent-controller.token      # per-node bearer token (mode 060
 | **Domain** | An overlay address space (CIDR) with an allocation and routing mode. |
 | **Generation** | The controller's monotonic deploy counter; bumped on each promote. |
 | **Stage / Promote** | Stage renders bundles invisibly at `gen+1`; promote flips them to current and bumps the generation. |
-| **Enrolled subgraph** | The approved, keyed nodes (and edges between them) the controller actually renders. |
+| **Deployment-ready subgraph** | Enrolled managed nodes plus valid manual nodes, together with eligible edges between them, that the controller actually renders. |
 | **Keystone** | An operator-held signing credential (browser WebAuthn or raw Ed25519 CLI) for trust-list/membership changes; YAOG stores public material only and does not attest WebAuthn hardware backing or non-exportability. |
 | **Node Condition** | A structured `{type,status,reason,message}` health item (`configapply`/`selfupdate`/`wireguard`/`mimic`). |
 | **AirGap vs AgentHeld** | Key-custody modes: private keys in the topology (local) vs held only by the node (controller). |

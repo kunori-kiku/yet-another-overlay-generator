@@ -1,52 +1,117 @@
-# Compiler & Allocation
+# Compiler and allocation
 
-<!-- last-verified: 2026-06-15 -->
-<!-- 2026-06-15 (extensible-i18n closeout): error responses now coded via the internal/apierr envelope {error:{code,message,params}} — English-default message + panel-localized by error.<code>; no endpoint/flow change. -->
+<!-- last-verified: 2026-07-17 -->
 
 ## Responsibility
-Deterministically transform a validated topology plus a key map into a compiled topology (sticky resource allocations written back as edge pins) and per-node WireGuard peer derivations, guaranteeing byte-identical re-allocation for every pre-existing entity on recompile.
+
+Transform a key-prepared topology into a compiled topology: enforce the schema and semantic gates,
+allocate overlay addresses, infer role capabilities, derive per-link peers and client `wg0` inputs,
+and write sticky link resources back into the returned topology. Rendering and export are later
+components (`internal/compiler/compiler.go:180-235`, `internal/compiler/compiler.go:237-335`,
+`internal/localcompile/compile.go:80-104`).
 
 ## Files
-- `internal/compiler/compiler.go:1-215` — `Compile` pipeline orchestrator: validate → allocate overlay IPs → infer capabilities → derive peers → write six `pinned_*` fields + `CompiledPort` back onto edges; stamps `AllocSchemaVersion = 1` (compiler.go:18,114).
-- `internal/compiler/peers.go:1-1081` — peer derivation: edge→link collapse, reserve-then-gap-fill allocation of ports/transit-IP pairs/link-local pairs, `PeerInfo` construction (forward + auto-reverse), `DeriveClientConfigs`, mimic MTU math, Babel link-cost resolution, `GenerateRouterID`.
-- `internal/allocator/ip.go:1-188` — overlay IP allocation per domain CIDR: keeps existing in-range `OverlayIP` verbatim, clears out-of-CIDR values, gap-fills lowest free host honoring `ReservedRanges` (ip.go:21-82,85-171).
-- `internal/linkid/linkid.go:1-66` — dependency-free link-identity authority shared with the validator: `PinKey` (sorted `a|b`, direction-agnostic, linkid.go:28-33), `LinkKey` (primary class = PinKey; backup = PinKey + `#edgeID`, linkid.go:53-59), `IsBackup` (linkid.go:64-66).
+
+- `internal/compiler/compiler.go:15-355` — owns compiler construction, validation and
+  allocation sequencing, result assembly, pin write-back, and manifest metadata.
+- `internal/allocator/ip.go:13-228` — preserves valid overlay addresses and performs bounded,
+  cancellable lowest-free IPv4 allocation around reserved ranges.
+- `internal/compiler/peers_build.go:17-431` — groups links and reserves existing resources
+  before deterministic gap-fill.
+- `internal/compiler/peers_build.go:434-1040` — builds forward/reverse peers and client
+  configuration inputs from the completed allocation map.
+- `internal/compiler/peers_prealloc.go:7-123` — represents and extracts resources occupied by edges
+  excluded from a controller subgraph.
+- `internal/compiler/roles.go:41-143` — derives role semantics and normalized capabilities.
+- `internal/linkid/linkid.go:23-65`, `internal/allocconst/allocconst.go:22-53`, and
+  `internal/compiler/orientation.go:3-15` — single-source link identity, shared allocation constants,
+  and forward/reverse resource orientation.
+- `internal/normalize/pins.go:1-238` — owns deterministic migration of historical pin collisions; it
+  is a pre-compiler repair boundary, not an allocator side effect.
 
 ## Inputs
-- `*model.Topology` — draft topology with optional sticky state riding on it: node `OverlayIP`, edge `pinned_from/to_port|transit_ip|link_local` (internal/model/topology.go:178-187). Validation runs inside `Compile` itself (compiler.go:80-89); rules live in the validator — see specs/model-validation.md.
-- `keys map[string]KeyPair` (`{PrivateKey, PublicKey}` strings, peers.go:64-67) — produced by `render.GenerateKeys` (internal/render/render.go:70); see specs/render-keys.md.
-- Callers: the controller stage compile on a per-node subgraph (internal/controller/compile.go — see specs/controller-stage-promote.md), the CLI `cmd/compiler`, and the in-browser WASM engine (the anonymous air-gap HTTP handlers were removed).
 
-Entry signature: `func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*CompileResult, error)` (compiler.go:78).
+`CompileAt` receives a context, topology, prepared node key map, and explicit compile timestamp;
+optional compiler state supplies controller-only excluded-edge reservations and the fleet mimic
+fallback default (`internal/compiler/compiler.go:121-180`). The canonical `localcompile` facade first
+copies every topology collection and resolves custody through
+[Render and key custody](render-keys.md), then passes those inputs to `CompileAt`
+(`internal/localcompile/compile.go:61-102`).
+
+Schema and semantic rules belong to [Model and validation](model-validation.md); the compiler runs
+those two gates in order and retains their warnings only after both are valid
+(`internal/compiler/compiler.go:180-197`). A controller subgraph additionally supplies resources
+reserved from excluded enabled edges so new ready links cannot claim their stored ports or addresses
+(`internal/controller/compile_subgraph.go:71-100`, `internal/compiler/peers_prealloc.go:30-108`).
 
 ## Outputs
-- `*CompileResult` (compiler.go:21-53):
-  - `Topology` — copy with allocated overlay IPs, inferred capabilities (compiler.go:118-120, via `InferCapabilitiesFromRole`, internal/compiler/roles.go:107-133), and pins/`CompiledPort` written back per edge (compiler.go:139-186). This pinned topology round-trips through panel persistence and controller storage — see specs/panel-design.md, specs/controller-store.md.
-  - `PeerMap map[string][]PeerInfo` — per-node interface specs (port, transit pair, link-local pair, endpoint, keepalive, interface name, mimic/MTU, link cost; peers.go:69-133).
-  - `ClientConfigs map[string]*ClientPeerInfo` — client wg0 material incl. AllowedIPs = all domain CIDRs ∪ resolved transit CIDRs (peers.go:938-966,1029-1053).
-  - `Warnings []validator.ValidationError` — non-fatal schema+semantic warnings surfaced to callers (compiler.go:91-95).
-  - `Manifest` with a non-canonical checksum: sha256 of `fmt.Sprintf("%v", topo)` truncated to 16 hex chars (compiler.go:211-215).
-- Consumed by `render.All(result, keys)` (internal/render/render.go:147) which fills the config maps — see specs/render-keys.md.
 
-Deep docs: docs/spec/compiler/pipeline.md, allocation-stability.md, ip-allocation.md, peer-derivation.md.
+`CompileResult` returns the allocated topology, per-node `PeerInfo` lists, client configurations,
+validation warnings, and a compile manifest; render-owned maps are initialized but still empty at
+this boundary (`internal/compiler/compiler.go:25-80`, `internal/compiler/compiler.go:312-335`). The
+topology carries allocated overlay IPs, inferred capabilities, allocation-schema version, and six
+oriented edge pins. Each enabled compiled edge with an endpoint host carries its effective `CompiledPort`
+(`internal/compiler/compiler.go:199-235`, `internal/compiler/compiler.go:237-310`).
 
-## Decision points
-- **Edge → link collapse (unify rule):** all enabled non-backup edges of a node pair collapse into one bidirectional link keyed by `PinKey`; each `role=="backup"` edge is its own link keyed `PinKey#edgeID` (peers.go:210-267, linkid.go:53-59). First enabled primary-class edge in array order is `primaryEdge` and fixes from/to orientation (peers.go:214-219).
-- **Reserve-then-gap-fill (Spec B):** Pass 1 reserves every complete pin pair from all links into the pools first (peers.go:292-339); only then are unpinned resources gap-filled iterating links sorted by linkKey, taking the lowest free slot per pool (peers.go:341-420). Partial (one-sided) pins are treated as unpinned (peers.go:293-294); ports count as pinned if either side > 0 (peers.go:365).
-- **Per-resource pools:** ports are per-node, scanning up from the node's `listen_port` base (default 51820), hard error past 65535 (peers.go:829-842); transit IPv4 pairs are per-CIDR (`domain.transit_cidr`, empty → `10.10.0.0/24`, peers.go:19,252-254), pair N = (network+2N+1, +2N+2), network/broadcast never allocated (peers.go:702-747); link-local pairs are global, `fe80::%x` hex-numbered (peers.go:864-873).
-- **Endpoint port:** `edge.EndpointPort > 0` is an explicit operator NAT override used verbatim; otherwise the remote interface's allocated listen port (peers.go:516-532; mirrored into `CompiledPort`, compiler.go:172-185).
-- **Auto-reverse peer:** every non-client link also emits the reverse `PeerInfo`; its endpoint resolves via the explicit reverse primary-class edge if present, else falls back to `PublicEndpoints[0].Host` + the allocated port — never `PublicEndpoints[0].Port` (peers.go:605-688, esp. 629-646).
-- **Keepalive 25** when the local node cannot accept inbound or no reverse primary-class edge exists (peers.go:534-539,615-618); backup edges never count as a reverse direction (peers.go:177-199).
-- **Client edges:** client side gets no per-peer interface or port; only the router-side `PeerInfo` (`IsClientPeer`, AllowedIPs = client `/32`) is emitted (peers.go:351-383,457-508); `DeriveClientConfigs` builds the client wg0 view (peers.go:969-1081).
-- **Babel link cost:** `edge.Priority` > `edge.Weight` > backup preset 384 > 0 (= role default) (peers.go:849-862).
-- **Mimic (transport=="tcp"):** sole signal for TCP shaping; MTU becomes `(node.MTU or 1420) − 12`, non-mimic MTU passes through untouched (peers.go:28-61).
+Local Design adopts the returned project, domains, nodes, edges, and allocation schema version; see
+[Panel Design](panel-design.md) (`frontend/src/stores/topologyStore.ts:760-799`). Controller staging
+merges only overlay addresses and allocation fields into the full public topology through a versioned
+compare-and-set; see [Controller stage and promote](controller-stage-promote.md)
+(`internal/controller/compile_subgraph.go:233-288`). [Render and key custody](render-keys.md) then
+fills rendered maps, and [Artifacts and signing](artifacts-signing.md) defines the canonical bundle
+set that the facade packages (`internal/localcompile/compile.go:27-32`,
+`internal/localcompile/compile.go:100-105`, `internal/localcompile/compile.go:110-177`).
+
+## Decision points (if any)
+
+- Overlay allocation preserves an existing in-domain address, clears an out-of-domain value, and
+  otherwise chooses the first free host while skipping used and reserved addresses under a hard scan
+  budget and periodic context cancellation checks (`internal/allocator/ip.go:40-115`,
+  `internal/allocator/ip.go:144-228`).
+- All enabled non-backup edges for one unordered node pair share a primary link identity; each backup
+  adds its edge ID and therefore receives an independent allocation (`internal/linkid/linkid.go:23-65`,
+  `internal/compiler/peers_build.go:54-79`, `internal/compiler/peers_build.go:171-213`).
+- Allocation reserves excluded-edge resources and every valid existing pin before visiting unpinned
+  links in sorted link-key order. Ports are per node, transit pairs per resolved CIDR, and link-local
+  pairs global; a client contributes no per-link port on its own endpoint
+  (`internal/compiler/peers_build.go:215-278`, `internal/compiler/peers_build.go:280-431`).
+- Role inference only normalizes capabilities upward where reachability or role requires it, except a
+  client explicitly loses forwarding, relay, and inbound acceptance. Peer derivation then selects
+  explicit endpoint-port overrides, keepalive, forward-only dialing, auto-reverse peers, or the
+  client-side shared `wg0` projection (`internal/compiler/roles.go:106-143`,
+  `internal/compiler/peers_build.go:461-610`, `internal/compiler/peers_build.go:617-690`,
+  `internal/compiler/peers_build.go:926-1040`).
+- Historical collision healing is deliberately outside compilation: the normalizer clears invalid
+  client-side ports and strips an entire later-in-link-key-order conflicting allocation. Controller
+  Save invokes it at ingestion, while preview and stage invoke it before validation/allocation
+  (`internal/normalize/pins.go:29-91`, `internal/normalize/pins.go:92-238`,
+  `internal/api/handler_topology.go:48-65`, `internal/controller/compile_preview.go:41-68`,
+  `internal/controller/compile_stage.go:92-116`).
 
 ## Invariants
-- **Allocation stability / superset rule** (PRINCIPLES.md "Allocation stability"): recompiling a superset reproduces identical values for existing entities — pins are reused verbatim, gap-fill order depends only on linkKey, never array position, so delete/re-add of the same pair is idempotent (peers.go:201-207,341-346; docs/spec/compiler/allocation-stability.md I1-I10).
-- **Backend is the sole port authority** (PRINCIPLES.md): the compiler allocates all listen ports; nonzero `endpoint_port` is only honored as an operator override and `CompiledPort` must equal the rendered endpoint's port (compiler.go:136-186).
-- **Stateless compiler** (PRINCIPLES.md): all allocation state rides the topology JSON (pins + `OverlayIP` + `AllocSchemaVersion`); `Compile` mutates copies, never the input (compiler.go:103-115, ip.go:28-30).
 
-## Gotchas
-- The render-output maps in `CompileResult` (`WireGuardConfigs`, `BabelConfigs`, `SysctlConfigs`, `InstallScripts`, `DeployScripts`) are initialized **empty** by `Compile` (compiler.go:191-195) and filled afterwards by `render.All` — see specs/render-keys.md.
-- The `allocations` map returned by `DerivePeers` is double-keyed: canonical `linkid.LinkKey` entries plus directed `"from->to"`/`"to->from"` aliases for primary links only (backup links get no alias); the key character sets (`|`/`#` vs `->`) are disjoint by construction (peers.go:408-419).
-- Overlay IP stickiness is value-based, not pin-field-based: any `OverlayIP` inside its domain CIDR survives verbatim, but shrinking/moving the domain CIDR silently force-clears and reallocates out-of-range addresses (ip.go:32-50). The allocator is IPv4-only and rejects host spaces ≥ 32 bits as a defensive guard (ip.go:111-122,173-182).
+- Valid pins are reused verbatim. Because all pins are reserved before sorted lowest-free gap-fill,
+  adding or reordering unpinned links cannot move an existing allocation; excluded controller edges
+  participate through the same reservation sets (`internal/compiler/peers_build.go:215-278`,
+  `internal/compiler/peers_build.go:280-431`).
+- Link identity and resource orientation are shared leaf contracts: validation, allocation, peer
+  construction, and write-back must not invent alternate pair keys or swap rules
+  (`internal/linkid/linkid.go:1-18`, `internal/compiler/orientation.go:3-15`,
+  `internal/compiler/compiler.go:271-309`).
+- The canonical facade calls `CompileAt` with an injected timestamp, and that timestamp affects only
+  manifest metadata. The compatibility `Compile` wrapper is the sole compiler entry that injects
+  `time.Now`; request context may cancel work but does not select different allocations
+  (`internal/compiler/compiler.go:159-180`, `internal/compiler/compiler.go:325-332`,
+  `internal/localcompile/compile.go:53-60`, `internal/localcompile/compile.go:92-98`).
+
+## Gotchas (optional)
+
+- `CompileResult`'s WireGuard, Babel, sysctl, installer, telemetry-policy, artifact-catalog, and deploy
+  maps are empty until `render.AllWith`; do not add renderer or exporter ownership here
+  (`internal/compiler/compiler.go:312-335`, `internal/localcompile/compile.go:100-104`).
+- Direct compiler callers do not receive collision migration automatically. Invalid or colliding pins
+  still fail validation unless their owning ingestion/stage boundary first applies
+  `normalize.HealCollidingPins` (`internal/compiler/compiler.go:180-191`,
+  `internal/normalize/pins.go:1-10`, `internal/controller/compile_stage.go:106-116`).
+- `CompileManifest.Checksum` is a truncated, Go-format-dependent display hint, not the canonical bundle
+  digest and never a signing anchor (`internal/compiler/compiler.go:338-355`).

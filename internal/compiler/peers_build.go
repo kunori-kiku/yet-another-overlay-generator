@@ -278,10 +278,10 @@ func preallocateLinkResources(links []*linkEntity, reserved *ReservedAllocations
 	}
 
 	// ======== Pass 1 phase 3: reserve all pins ========
-	// Before any gap-fill, reserve each link's (complete paired) pins resource by
-	// resource. A partial pin (single-sided value) is uniformly treated here as "that
-	// resource is unpinned" and skipped — pairing validation is handled by the
-	// validator's partition.
+	// Before any gap-fill, reserve each link's valid pins resource by resource. Transit,
+	// link-local, and ordinary-link port pins require complete pairs. A client link's one
+	// valid non-client-side port is the deliberate single-sided exception; every other
+	// partial resource is treated as unpinned here after validation has rejected it.
 	pinnedAllocations := make(map[string]*pairAllocation) // linkKey -> allocation built directly from pins
 	for _, link := range links {
 		// Pins are taken from this link's primaryEdge: a unified primary link's pins are
@@ -297,8 +297,20 @@ func preallocateLinkResources(links []*linkEntity, reserved *ReservedAllocations
 		}
 		hasAnyPin := false
 
-		// Port pin (treated as pinned only when complete-paired and neither side is a client).
-		if !isFromClient && !isToClient && edge.PinnedFromPort > 0 && edge.PinnedToPort > 0 {
+		// Port pins normally form a pair. A client link is the deliberate exception: the
+		// client endpoint uses its shared wg0 and therefore has no per-link port, while the
+		// non-client endpoint still owns one real per-link interface/listen port. Semantic
+		// validation guarantees that only that non-client side can be present.
+		switch {
+		case isFromClient && !isToClient && edge.PinnedToPort > 0:
+			alloc.toPort = edge.PinnedToPort
+			markPort(link.toNode.ID, edge.PinnedToPort)
+			hasAnyPin = true
+		case isToClient && !isFromClient && edge.PinnedFromPort > 0:
+			alloc.fromPort = edge.PinnedFromPort
+			markPort(link.fromNode.ID, edge.PinnedFromPort)
+			hasAnyPin = true
+		case !isFromClient && !isToClient && edge.PinnedFromPort > 0 && edge.PinnedToPort > 0:
 			alloc.fromPort = edge.PinnedFromPort
 			alloc.toPort = edge.PinnedToPort
 			markPort(link.fromNode.ID, edge.PinnedFromPort)
@@ -357,9 +369,10 @@ func preallocateLinkResources(links []*linkEntity, reserved *ReservedAllocations
 		// single wg0), so its port stays 0 and is not reserved; but the "non-client side"
 		// (router/relay/gateway) of an edge touching a client still needs a listen port
 		// allocated, otherwise DeriveClientConfigs cannot tell which port the client
-		// should dial. Hence each side is decided independently. Port pins are paired
-		// (guaranteed by the validator), so if either side is pinned the whole pair is
-		// treated as pinned and allocation is skipped.
+		// should dial. Hence each side is decided independently. Ordinary links carry a
+		// complete pair; client links may carry the one valid non-client-side pin. In both
+		// cases, any reserved side means the port allocation is already complete for that
+		// link shape and gap-fill is skipped.
 		portsPinned := alloc.fromPort > 0 || alloc.toPort > 0
 		if !portsPinned {
 			if !isFromClient {

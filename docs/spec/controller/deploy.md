@@ -1,7 +1,8 @@
 # Controller Compile / Stage / Promote (Phase 2 — plan-4.3a, the deploy model)
 
 This document defines how the controller turns a tenant's stored, **public-keys-only** topology plus
-its **enrolled registry** into signed, per-node bundles that a node agent can pull and apply. It
+its managed-node registry and validated manual-node identities into signed, per-node bundles. Managed
+agents pull and apply those bundles; operators download manual bundles for `yaog-agent kit apply`. It
 covers the **compile → stage → promote** model, the **render-what's-ready** policy that decides which
 nodes and edges are rendered, and the decision to **reuse the frozen compiler/renderer/exporter**
 rather than reimplement them. It is the deploy half of the controller: it sits between the registry
@@ -10,21 +11,21 @@ that [enrollment.md](enrollment.md) populates and the bundles that [signing.md](
 custody contract of [key-custody.md](key-custody.md).
 
 **Scope of this milestone (plan-4.3a).** This document and the `CompileAndStage` step
-(`internal/controller/compile.go`) are the **compile/stage core**: pure, in-process, no HTTP. The
+(`internal/controller/compile_stage.go`) are the **compile/stage core**: in-process, no HTTP. The
 operator-facing **HTTP endpoints** (`/stage`, `/promote`, `/config`, `/poll`, `/report`) and the
 **plain-HTTP server** that **bearer-token-authenticates** them are [controller-api.md](controller-api.md)
 (plan-4.5); the **node-agent integration** (the agent's keygen→enroll→pull→verify→apply loop wired against
 the live controller) and the **end-to-end** tests are [agent.md](agent.md) (plan-4.5). The promote half
 of the model is the existing `Store.PromoteStaged` ([persistence.md](persistence.md)); this milestone
 produces the staged bundles it flips. See
-[../../../implementation_plans/controller-panel-2026_06_08/plan-4-2026_06_08.md](../../../implementation_plans/controller-panel-2026_06_08/plan-4-2026_06_08.md).
+[../../../implementation_plans/_completed/controller-panel-2026_06_08/plan-4-2026_06_08.md](../../../implementation_plans/_completed/controller-panel-2026_06_08/plan-4-2026_06_08.md).
 
 ## The compile / stage / promote model
 
 A deploy is a **two-phase, operator-gated** transition over a tenant's generation counter:
 
 1. **Compile + stage** (`CompileAndStage`, this document). The controller loads the stored topology,
-   selects the enrolled subgraph, drives the frozen pipeline to render and sign per-node bundles, and
+   selects the ready subgraph, drives the frozen pipeline to render and sign per-node bundles, and
    **stages** each bundle at the **next** generation (`CurrentGeneration + 1`). Staging is reversible
    and invisible to agents: a staged bundle is not yet `current`, so `GetCurrentBundle` and the `/poll`
    long-poll do not surface it. Re-running `CompileAndStage` replaces the prior staged set for the same
@@ -51,30 +52,40 @@ and a staged generation 1; after promote, current becomes 1.
 
 ## The render-what's-ready policy
 
-The controller renders **only the enrolled subgraph** of the stored topology — never the full design.
+The controller renders **only the ready subgraph** of the stored topology — never the full design.
 This is what lets an operator design the whole intended fleet up front, then bring nodes online
 incrementally: each deploy renders exactly the part of the design that is **ready**, and the rest fills
 in on later deploys as more nodes enroll.
 
-**The enrolled-subgraph filter.**
+**The ready-subgraph filter.**
 
-- **Node admission.** A topology node is included **iff** its registry record is `NodeApproved` **and**
-  has a non-empty `WGPublicKey`. A node that is `NodePending` (slot created, not yet enrolled),
-  `NodeRevoked`, or has no public key is **excluded**. The included node's `WireGuardPublicKey` is set
-  from the **registry** value (authoritative — the agent holds the matching private key), and any stray
-  `WireGuardPrivateKey` carried on the stored topology node is **cleared** before rendering, preserving
-  zero-knowledge custody (see below).
-- **Edge dropping.** An edge is kept **iff both** its `FromNodeID` and `ToNodeID` are in the enrolled
-  set. An edge whose far end has not enrolled is **omitted** from this render — the near node's bundle
-  simply does not yet carry that peer interface. When the far end later enrolls and the operator
+- **Managed-node admission.** A managed topology node is included **iff** its registry record is
+  `NodeApproved` **and** has a non-empty `WGPublicKey`. A managed node that is `NodePending` (slot
+  created, not yet enrolled), `NodeRevoked`, or has no public key is **excluded**. The included node's
+  `WireGuardPublicKey` is set from the **registry** value (authoritative — the agent holds the matching
+  private key), and any stray `WireGuardPrivateKey` carried on the stored topology node is **cleared**
+  before rendering, preserving zero-knowledge custody (see below).
+- **Manual-node admission.** A `deployment_mode:"manual"` node never enrolls. It is ready from its
+  non-empty topology `wireguard_public_key`, which is an operator assertion validated before subgraph
+  projection. Missing, malformed, duplicate, or registry-colliding manual public keys fail the preview
+  or stage as structured `manual_node_invalid` errors; they are not reported as transient enrollment
+  skips. The controller still clears every private-key field before rendering. Manual bundles use the
+  same AgentHeld verification/apply path through `yaog-agent kit apply`.
+- **Edge dropping.** An edge is kept **iff both** its `FromNodeID` and `ToNodeID` are in the ready set.
+  An edge whose far end is not ready is **omitted** from this render — the near node's bundle simply
+  does not yet carry that peer interface. When the far end later becomes ready and the operator
   re-deploys, the edge reappears in **both** nodes' bundles. Nothing about the design is lost; the
   peering simply **activates on a later deploy**.
-- **Reporting.** Excluded nodes are returned in `StageResult.SkippedUnenrolled` (node IDs), so the
-  operator sees exactly who is waiting on enrollment. Included nodes are returned in
-  `StageResult.Staged` (node IDs).
+- **Reporting.** Excluded **managed** nodes are returned in the historically named
+  `StageResult.SkippedUnenrolled` field (node IDs). It includes pending, revoked, or keyless managed
+  nodes and a public-key-ready client whose target is not ready; it therefore means “excluded from
+  this deployment-ready projection,” not literally “waiting on enrollment.” A manual node is never
+  listed there.
+  Included changed nodes are returned in `StageResult.Staged`; admitted byte-identical nodes may
+  instead appear in `StageResult.UnchangedNodeIDs` under delta deploy.
 - **Empty cases.** No stored topology (`ErrNotFound`) → an empty `StageResult` with no error (nothing to
-  stage yet). Zero enrolled nodes → an empty `StageResult` (with `SkippedUnenrolled` populated) and no
-  error — staging nothing is a benign no-op, not a failure.
+  stage yet). Zero ready nodes → an empty `StageResult` (with excluded managed nodes in
+  `SkippedUnenrolled`) and no error — staging nothing is a benign no-op, not a failure.
 
 **Idempotent fill-in — via allocation write-back.** Allocation stability (invariant I10, see
 [../compiler/allocation-stability.md](../compiler/allocation-stability.md)) does **not** come for free
@@ -88,32 +99,64 @@ a new enrollment reproduces the **same** allocations for the already-staged node
 **adds** the newly-ready ones — incremental enrollment never perturbs a node that was already live.
 
 **Client readiness.** A `client` role requires exactly one enabled outbound edge (the compiler treats
-a clientless-edge as a hard error). So an enrolled client whose dial target (its router/relay/gateway)
-is **not yet enrolled** is itself treated as **not ready**: it is reported in `SkippedUnenrolled` and
-not staged, exactly like an unenrolled node, and activates on a later deploy once its target enrolls.
-This keeps render-what's-ready honest for clients — a client enrolling before its router never fails
-the whole stage.
+a clientless edge as a hard error). A public-key-ready client whose dial target
+(router/relay/gateway) is not itself ready is therefore removed from this projection and activates on a
+later deploy. An excluded managed client is reported in the historically named `SkippedUnenrolled`
+field; a manual client is not. This keeps render-what's-ready honest when a client is known before its
+target. Allocation pins on a client link are endpoint-specific: shared client `wg0`
+has no per-link listen-port pin, while the non-client endpoint's port and the complete
+transit/link-local pairs remain valid sticky allocations.
 
-### Active telemetry requires the off-host keystone
+### Active telemetry requires the off-host keystone and agent readiness
 
-An admitted managed node may carry a bounded `telemetry_probes` policy. That policy becomes outbound
-network activity, so it has a stronger gate than passive metrics: both `DeployPreview` and
-`CompileAndStage` refuse a probe-bearing ready subgraph unless the tenant has a pinned off-host
-keystone. The refusal occurs before export, allocation write-back, or staging and maps to HTTP 412
-`telemetry_probes_require_keystone`.
+An admitted node may carry bounded `telemetry_probes` or opt-in `telemetry_devices` policy. Those
+fields authorize outbound traffic or local system observation, so both `DeployPreview` and
+`CompileAndStage` refuse an active-policy-bearing ready subgraph unless the tenant has a pinned
+off-host keystone. The refusal occurs before export, allocation write-back, signing-anchor mutation,
+or staged-set publication and maps to HTTP 412 `telemetry_probes_require_keystone` (the historical
+code now covers both policy families).
 
-When authorized, AgentHeld rendering emits versioned `telemetry.json` as an ordinary checksum- and
-signature-covered bundle member. The agent repeats membership verification and activates it only after
-a successful apply, preserving the previous policy on failure. See
-[../operations/active-telemetry.md](../operations/active-telemetry.md). This gate does not apply to a
-node with no probes, so existing fleets and historical bundle bytes remain compatible.
+The stored controller topology is also a work-in-progress draft, so Save may retain an unfinished
+probe destination. That does not weaken deployment validation: preview/stage project the ready
+subgraph first, then reject an incomplete policy on a ready node as structured topology validation
+(HTTP 422) before any served bundle or promotable staged set changes. An unfinished policy on a
+not-yet-ready managed node does not block unrelated ready nodes. ICMP/TCP use the single IP-or-DNS
+`host` field (TCP also requires `port`); URL uses its separately typed absolute HTTP(S) target and
+exact expected status. There is no separate mandatory DNS field.
+
+AgentHeld rendering preserves strict legacy bytes: ICMP/TCP-only policy is emitted as
+`telemetry.json` version 1, while URL or automatic-device policy is emitted as the separately named
+`telemetry-policy.json` version 2. The members are mutually exclusive, checksum-covered, optionally
+covered by `bundle.sig`, and bound by the off-host keystone's exact membership digest. The agent
+rejects a dual-member or malformed candidate before root mutation and activates the one canonical
+policy only after a successful apply; a failure retains the previous last-known-good policy.
+
+Successor policy has an additional rolling-upgrade gate. Normal deploy preview/stage requires the
+latest `telemetry-policy-v2` plus feature capability advertisement received from every affected ready
+managed agent through authenticated telemetry; absence maps to HTTP 412
+`telemetry_policy_upgrade_required`. The explicit
+`upgrade-agents-first` mode removes URL/device fields only from the deployment copy, preserves any
+legacy ICMP/TCP projection, and returns the affected ready node IDs in
+`telemetry_policy_omitted_node_ids` without rewriting the saved draft. The preview warns when the
+configured signed self-update is absent or does not cover every affected node; those agents require
+an out-of-band upgrade. After every affected node has advertised the required capabilities, a normal
+deploy activates the saved successor policy. Manual nodes have no
+resident reporting agent and cannot carry active telemetry; ready-subgraph validation rejects such
+policy instead of trying to infer readiness from a nonexistent heartbeat.
+
+An optional probe `name` is controller/Fleet presentation metadata and is projected out of both
+executable policy members and agent results. Executable identity is stable ID plus the exact typed
+destination (and URL expected-status contract). Consequently, a name-only Save updates the displayed
+label but leaves bundle content and served digests unchanged; an ordinary delta stage does not restage
+or advance generation for that rename alone. See
+[../operations/active-telemetry.md](../operations/active-telemetry.md).
 
 ## Delta deploy — skip unchanged nodes
 
 Render-what's-ready decides **which nodes are eligible** to stage; the **delta-skip** (plan-5) decides
 which of those eligible nodes actually **need** re-staging. Without it, every Deploy re-staged every
-enrolled node at a new generation, so every agent re-fetched and re-applied an **identical** bundle —
-a needless fleet-wide churn (and a brief per-link re-handshake) even when nothing about a node changed.
+ready node at a new generation, so managed agents re-fetched and re-applied **identical** bundles and
+manual downloads were needlessly replaced — fleet-wide churn even when nothing about a node changed.
 The delta-skip makes a Deploy touch only the nodes whose config actually differs.
 
 **The content identity — the served-bundle digest.** For each freshly compiled node bundle the
@@ -123,20 +166,20 @@ is **byte-stable across recompiles** when the node's actual configuration is unc
 moment any rendered byte does. This is the **same** digest the keystone manifest binds (§Zero-knowledge
 custody / [signing.md](signing.md)), reused as the change-detection identity — no second hashing scheme.
 
-**The per-node decision.** For each enrolled node, `CompileAndStage` compares the freshly compiled
+**The per-node decision.** For each ready node, `CompileAndStage` compares the freshly compiled
 `bundleSHA256` against `servedBundleDigest(node)` — `hex(sha256(...))` of the node's **currently served
 (promoted) bundle**. If they are **equal** (and the node is not force-listed, and the skip is enabled —
 below), the node is **unchanged**: it is **not** re-staged and **keeps its current generation**. It is
 reported in `StageResult.UnchangedNodeIDs`; the nodes that did change are `StageResult.Staged`. Together
-they are the full enrolled set for a normal deploy.
+they are the full ready set for a normal deploy.
 
-**Why keeping the generation is what avoids the re-fetch.** `PromoteStaged` stamps a new
+**Why keeping the generation avoids replacement.** `PromoteStaged` stamps a new
 `DesiredGeneration` only on the nodes it actually promotes. An unchanged node was never staged, so its
-`DesiredGeneration` is untouched, so its agent's `/poll` never sees a newer generation and **never
-re-fetches** — the fleet ends up at a **mixed generation** (changed nodes advanced, unchanged nodes held
-back), which is correct: each node's generation is independent, and a node only advances when its own
-config changes. A brief per-link re-handshake now happens **only** on the links whose endpoints actually
-changed, not fleet-wide.
+generation and served/downloadable bundle stay untouched. For a managed node, `/poll` therefore never
+sees a newer bundle generation and the agent **never re-fetches or re-applies** it; for a manual node,
+the downloadable bundle is simply not replaced. The fleet can be at mixed per-node generations, which
+is correct because a node advances only when its own config changes. A brief per-link re-handshake now
+happens **only** on links whose endpoints actually changed, not fleet-wide.
 
 **FAIL OPEN.** `servedBundleDigest` returns `ok = false` on **any** uncertainty — the node was never
 promoted (no served bundle), its `checksums.sha256` is missing, or the store read errored. In every such
@@ -156,12 +199,12 @@ trust-list**:
 
 In both cases a per-node skip would leave the regenerated/re-signed trust-list bound to only the handful
 of content-changed nodes, **stranding** the served trust-list for the rest — so the skip stands down and
-the manifest binds the whole enrolled set (`digests` is populated for **all** nodes, changed or not,
+the manifest binds the whole ready set (`digests` is populated for **all** nodes, changed or not,
 whenever the keystone is on). A non-keystone tenant, or a healthy keystone past its first pin with no
 pending rotation, runs the skip normally. `stageSkipEnabled` is **shared** by `CompileAndStage` and
 `DeployPreview`, so a preview can never disagree with what a real Deploy would do.
 
-**The zero-changed short-circuit MUST purge.** When **every** enrolled node matches its served bundle,
+**The zero-changed short-circuit MUST purge.** When **every** ready node matches its served bundle,
 nothing is staged and there is no new promotable generation — `CompileAndStage` returns the **current**
 generation with the whole set in `UnchangedNodeIDs`, and does **not** re-stage the manifest. But it must
 still **purge any lingering staged bundle**: a bundle left staged by a prior *stage-without-promote*
@@ -172,7 +215,7 @@ audited `purge-staged`), exactly as the empty-subgraph path does. A `stage-uncha
 the no-op deploy.
 
 **Force — the operator escape hatch.** `CompileAndStage` takes variadic `StageOption`s:
-`WithForceAll()` re-stages **every** enrolled node even if unchanged; `WithForceNodes(ids…)` re-stages
+`WithForceAll()` re-stages **every** ready node even if unchanged; `WithForceNodes(ids…)` re-stages
 the **named** nodes. Force is for **on-host drift / rescue only** — a node whose local config was
 tampered with or lost and needs its bundle re-pushed at a fresh generation. It is **not** needed for the
 ordinary cases: a genuine config change re-stages naturally (its digest moved), and keystone
@@ -181,31 +224,39 @@ node-detail page (`forceRedeployNode`), which reuses the same `deploy(force_node
 
 **Pre-deploy preview — a read-only dry-run.** `DeployPreview` compiles the operator's **current canvas**
 (the same public-keys-only topology a Deploy pushes and stages, healed for pin collisions) and reports,
-per enrolled node, whether an **unforced** Deploy **would** re-stage it (`Changed`) or skip it, plus a
+per ready node, whether an **unforced** Deploy **would** re-stage it (`Changed`) or skip it, plus a
 `KeystoneFullRestage` flag when the skip is disabled — **without** staging anything. It shares the
 **same** `stageSkipEnabled` decision and the **same** `bundleSHA256`-vs-`servedBundleDigest` identity as
 the real stage, so "N updated, M unchanged" in the Deploy dialog matches the actual outcome. It is
-**fail-open** (a node whose served digest can't be read previews as `Changed`) and, in the panel,
-**best-effort**: a preview that fails (e.g. a newer panel against an older controller with no
-`deploy-preview` route) surfaces the error but never blocks the operator from deploying anyway.
+**fail-open** only for per-node served-digest uncertainty, which previews that node as `Changed`. The
+panel's **Deploy anyway** compatibility escape is much narrower: it appears only when an older
+controller answers the preview request with HTTP 404 or 405 because the POST `deploy-preview` route is
+absent. Topology validation (including HTTP 422 incomplete-probe failures), keystone/security
+preconditions, storage/render/export failures, network errors, and other statuses remain blocking;
+the panel must not bypass a real controller fault merely because it happened during preview.
 
 ## Reusing the frozen pipeline
 
 `CompileAndStage` **reuses** the existing, tested pipeline end-to-end and reimplements **none** of it.
-The compiler, renderer, and exporter stay **frozen and dependency-minimal** (the quarantine boundary of
-[persistence.md](persistence.md)); the controller is a **caller**, not a fork:
+`CompileSubgraph` in `internal/controller/compile_subgraph.go` projects the ready topology, then enters
+the single shared `internal/localcompile` façade. The compiler, renderer, and exporter stay
+dependency-minimal (the quarantine boundary of [persistence.md](persistence.md)); the controller is a
+**caller**, not a fork:
 
 ```
-render.GenerateKeys(&subgraph, render.AgentHeld)   // zero-knowledge key prep
-compiler.NewCompiler().Compile(&subgraph, keys)    // pure topology → peer configs
-render.All(result, keys)                            // pure compiled data → bundle bytes
-artifacts.Export(result, tmpDir)                    // write per-node dirs (+ sign if env set)
+CompileSubgraph(...)
+  -> localcompile.CompileResultCtx(CompileRequest{
+       Topology: subgraph, Custody: render.AgentHeld, ...
+     })
+  -> validator/compiler -> render orchestration -> artifact assembly
+CompileAndStage(...) -> artifacts.ExportWithSigner(...) -> Store.ReplaceStagedSet(...)
 ```
 
-This is the **same** path the air-gap CLI and HTTP API take — the controller adds only the subgraph
-filter in front and the stage write-back behind. The payoff is no duplication and no refactor: the
-standing custody/equivalence/signing tests in `internal/render` and `internal/artifacts` already cover
-the bytes the controller stages, so the controller inherits their guarantees for free.
+This is the **same** façade used by the offline CLI and browser Go/WASM engine — there is no anonymous
+HTTP compile API. The controller adds only its ready-subgraph projection in front and staged-set/
+allocation write-back behind. The standing custody, equivalence, and signing tests in
+`internal/localcompile`, `internal/render`, and `internal/artifacts` therefore cover the bytes the
+controller stages without an alternate entrypoint pipeline.
 
 **The temp-dir round-trip.** `artifacts.Export` writes to a **filesystem** directory (one subdir per
 node), so `CompileAndStage` exports to an `os.MkdirTemp` directory, reads each node's subdir back into a
@@ -247,10 +298,10 @@ A full deploy leaves a complete, hash-chained audit trail (`AppendAudit`,
 [persistence.md](persistence.md) §audit hash chain). The stage-path entries, all `Actor:"operator"`:
 
 - **`stage`** — one per invocation that actually staged ≥1 node (fleet-wide, empty `NodeID`).
-- **`stage-empty`** — a zero-enrolled stage (controller-server-authority-redesign plan-3). This is the
+- **`stage-empty`** — a zero-ready-node stage (controller-server-authority-redesign plan-3). This is the
   design-destroying-deploy shape (every node skipped), so it is now recorded rather than silent. The
   **no stored topology** path (`GetTopology` → `ErrNotFound`) still returns before any audit (nothing
-  was ever there to stage); the **zero-enrolled** path audits.
+  was ever there to stage); the **zero-ready-node** path audits.
 - **`purge-staged`** (one per node) — when a re-stage (including a zero-node stage) drops a node that
   was staged before but is no longer in the stage set, its stale staged bundle is purged so it cannot
   go live on a later promote, and each purge is attributable.
@@ -319,13 +370,14 @@ operator must wait for one step to finish before triggering the next:
    agent resumes from the **polled wake generation**, not the fetched bundle generation — see
    [agent.md](agent.md) §watermark advance.)
 
-3. **Operator: wait for the badges to clear.** The operator panel renders a "rotating keys" badge per node
-   from `nodeJSON.rekey_requested`. The operator **waits until every badge has cleared** (every node has
-   re-registered its new public key) before deploying. Deploying mid-rotation would recompile the topology
-   while some nodes still carry old and others carry new public keys — a **mixed-key** render that would not
-   converge. The panel's Deploy control is **disabled while any node still shows the badge** to enforce this.
+3. **Operator: normally wait for the badges to clear.** The panel renders a “rotating keys” badge per
+   node from `nodeJSON.rekey_requested`. Waiting until every badge clears lets one deployment converge
+   the whole fleet. Deploy remains available earlier behind an explicit advisory confirmation: each
+   node is compiled against the public key currently registered for it, so already-rotated nodes and
+   stragglers receive internally consistent bundles. A straggler that rotates later needs another
+   deployment, or the operator can explicitly cancel its pending rekey if it will never return.
 
-4. **Operator: Deploy ONCE.** With all nodes re-registered, a single normal **compile+stage+promote**
+4. **Operator: Deploy once after all badges clear.** With all nodes re-registered, a single normal **compile+stage+promote**
    recompiles the fleet from the **new** public keys now in the registry and promotes a strictly-greater
    generation. Every agent applies it on its next cycle and the fleet converges on the rotated keys.
 
@@ -342,19 +394,20 @@ controller with one.
   generation, wakes agents).
 - **Delta-skip**: a node whose freshly compiled `bundleSHA256` (of `checksums.sha256`, excluding the
   volatile `compiled_at`) equals its **served** bundle is **not** re-staged and **keeps its generation**,
-  so its agent never re-fetches — a Deploy touches only changed nodes (mixed-generation fleet).
+  so a managed agent never re-fetches/re-applies it and an unchanged manual bundle is not replaced —
+  a Deploy touches only changed nodes (mixed-generation fleet).
   **Fail-open**; **disabled** for keystone first-pin / rotation (which must re-pin the whole trust-list);
   the zero-changed path **purges** lingering staged bundles. `WithForceAll` / `WithForceNodes` override
   it for on-host drift/rescue; `DeployPreview` is the read-only "N updated, M unchanged" dry-run over the
   current canvas.
 - **Fleet-wide key rotation** is `POST /rekey-all` (flag approved nodes **+** `BumpGeneration` to WAKE the
   fleet, a generation advance with NO bundle change) → each agent **rotates + re-registers + skips apply**
-  (advancing its watermark past the wake) → the operator **waits for every badge to clear** → **one** normal
-  Deploy recompiles from the new public keys. A brief, rolling per-link flap during that Deploy is the
-  accepted cost.
-- The render-what's-ready policy renders **only** approved nodes with a public key, **drops** edges to
-  unenrolled peers, and **fills them in** on re-deploy — incremental fleet bring-up without perturbing
-  live nodes.
+  (advancing its watermark past the wake) → the operator normally **waits for every badge to clear** →
+  **one** normal Deploy recompiles from all new public keys. An earlier, explicitly confirmed Deploy is
+  allowed but may require a follow-up for stragglers. A brief, rolling per-link flap is the accepted cost.
+- The render-what's-ready policy admits approved managed nodes with registered public keys and valid
+  manual nodes with topology public keys, **drops** edges to any not-ready peer, and **fills them in**
+  on re-deploy—incremental fleet bring-up without perturbing live nodes.
 - The frozen compiler/renderer/exporter are **reused** through a temp-dir round-trip (no duplication, no
   refactor; in-memory Export is a possible later optimization).
 - **Zero-knowledge** is preserved: AgentHeld placeholder keys, public-keys-only registry, signing inside

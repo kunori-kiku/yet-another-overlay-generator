@@ -118,3 +118,99 @@ func TestSeriesIDSeparatesExecutableDestination(t *testing.T) {
 		}
 	}
 }
+
+func validURLSuccess() Result {
+	return Result{
+		ID: "health", Type: "url", URL: "https://service.example/health?full=1",
+		ExpectedStatus: 204, ActualStatus: 204, Status: StatusSuccess,
+		LatencyMS: float64Pointer(18.5), CheckedAt: "2026-07-17T06:20:00Z", IntervalMS: 60_000,
+	}
+}
+
+func TestURLResultValidationAndHistoryProjection(t *testing.T) {
+	success := validURLSuccess()
+	if !Valid(success, false) {
+		t.Fatal("valid URL success was rejected")
+	}
+	mismatch := success
+	mismatch.Status = StatusFailure
+	mismatch.ActualStatus = 503
+	mismatch.FailureReason = FailureUnexpectedStatus
+	if !Valid(mismatch, false) {
+		t.Fatal("valid unexpected-status response was rejected")
+	}
+	transport := success
+	transport.Status = StatusFailure
+	transport.ActualStatus = 0
+	transport.LatencyMS = nil
+	transport.FailureReason = FailureTimeout
+	if !Valid(transport, false) {
+		t.Fatal("valid URL transport failure was rejected")
+	}
+	pending := success
+	pending.Status = StatusPending
+	pending.ActualStatus = 0
+	pending.LatencyMS = nil
+	pending.CheckedAt = ""
+	if Valid(pending, false) || !Valid(pending, true) {
+		t.Fatal("URL pending acceptance did not honor allowPending")
+	}
+
+	bad := []Result{
+		func() Result { r := success; r.ExpectedStatus = 0; return r }(),
+		func() Result { r := success; r.ActualStatus = 200; return r }(),
+		func() Result { r := mismatch; r.ActualStatus = 204; return r }(),
+		func() Result { r := mismatch; r.ActualStatus = 99; return r }(),
+		func() Result { r := mismatch; r.LatencyMS = nil; return r }(),
+		func() Result { r := transport; r.ActualStatus = 503; return r }(),
+		func() Result { r := transport; r.LatencyMS = float64Pointer(1); return r }(),
+		func() Result { r := validSuccess(); r.URL = "https://unexpected.example"; return r }(),
+		func() Result { r := validSuccess(); r.ActualStatus = 200; return r }(),
+	}
+	for i, candidate := range bad {
+		if Valid(candidate, true) {
+			t.Fatalf("invalid URL/cross-type result %d was accepted: %+v", i, candidate)
+		}
+	}
+
+	projectedSuccess := success
+	projectedSuccess.ActualStatus = 0
+	projectedMismatch := mismatch
+	projectedMismatch.ActualStatus = 0
+	if Valid(projectedSuccess, false) || Valid(projectedMismatch, false) {
+		t.Fatal("live validator accepted URL history rows with omitted actual status")
+	}
+	if !ValidHistoryProjection(projectedSuccess) || !ValidHistoryProjection(projectedMismatch) ||
+		!ValidHistoryProjection(transport) {
+		t.Fatal("strict URL history projection rejected a valid completed row")
+	}
+	if ValidHistoryProjection(pending) || ValidHistoryProjection(success) {
+		t.Fatal("history projection accepted pending or categorical latest metadata")
+	}
+}
+
+func TestURLSeriesIDSeparatesExpectedContractWithoutChangingLegacy(t *testing.T) {
+	legacy := validSuccess()
+	const pinnedLegacy = "07325b90fda538fd9714bddb79500e8b29a68a96732f6b1f96376d7be6c8be2f"
+	if got := SeriesID(legacy); got != pinnedLegacy {
+		t.Fatalf("legacy SeriesID changed: %s, want %s", got, pinnedLegacy)
+	}
+	base := validURLSuccess()
+	want := SeriesID(base)
+	variants := []Result{base, base, base}
+	variants[0].ID = "other"
+	variants[1].URL = "https://service.example/other"
+	variants[2].ExpectedStatus = 200
+	for _, variant := range variants {
+		if SeriesID(variant) == want {
+			t.Fatalf("URL executable-contract change did not split series: %+v", variant)
+		}
+	}
+	defaultStatus := base
+	defaultStatus.ExpectedStatus = 0
+	explicit200 := base
+	explicit200.ExpectedStatus = 200
+	if SeriesID(defaultStatus) != SeriesID(explicit200) {
+		t.Fatal("URL default expected status did not share explicit-200 series identity")
+	}
+}

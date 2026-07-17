@@ -234,4 +234,4 @@ empty `TargetAgentVersion` ⇒ no self-update ⇒ no chip). This closes the desc
 ## Out of scope
 
 Auto (non-canary) fleet rollout; closing the bootstrap-TOFU hole (the agent's first binary is
-fetched by the bootstrap over TLS-to-the-mirror without a pre-shared pin — deferred to rc.2).
+fetched by the bootstrap over TLS-to-the-mirror without a pre-shared pin) remains future work.

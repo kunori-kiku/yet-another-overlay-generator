@@ -68,6 +68,10 @@ var (
 	// the operator and before it attempted the field-scoped update. Retrying must re-authenticate
 	// against current state; a stale disable must never clear a newly-registered passkey.
 	ErrLoginCredentialChanged = errors.New("controller: login credential changed concurrently")
+	// ErrTopologyChanged is returned when a deployment attempts to persist compiler allocation
+	// pins against a topology version that has since been replaced. The caller must reload and
+	// recompile current topology rather than overwrite an operator's concurrent Fleet save.
+	ErrTopologyChanged = errors.New("controller: topology changed concurrently")
 	// ErrTOTPStateChanged is returned when a TOTP enrollment/disable ceremony was verified against
 	// a state that changed before its field-scoped write. Retrying must re-read and re-verify; a
 	// stale whole-account write must never resurrect or erase either TOTP or a login passkey.
@@ -225,7 +229,7 @@ func stampConditions(conditions []runtimecontract.Condition, observedAt time.Tim
 
 // TopologyRecord is the operator's stored topology for a tenant. The JSON is
 // public-keys-only (it must not carry WireGuard private keys); Version increments
-// on each PutTopology.
+// on each PutTopology and each changed CompareAndSetTopology.
 type TopologyRecord struct {
 	Version   int64
 	JSON      []byte
@@ -610,12 +614,12 @@ type Store interface {
 	// overlapping recent-attempt windows are deduplicated. The controller exposes at most the most
 	// recently active sixteen series from this raw typed result.
 	QueryTelemetryProbeHistory(ctx context.Context, t TenantID, nodeID string, from, to time.Time) ([]ProbeHistorySample, error)
-	// QueryTelemetryHistorySnapshot returns both history projections from one coherent store snapshot.
-	// Prefer it when a caller needs resources and probes together so durable JSONL is scanned once.
+	// QueryTelemetryHistorySnapshot returns the legacy resource/all-probe projections from one coherent
+	// store snapshot. Device history is exact-only and is never exposed through this broad method.
 	QueryTelemetryHistorySnapshot(ctx context.Context, t TenantID, nodeID string, from, to time.Time) (TelemetryHistorySnapshot, error)
-	// QueryTelemetryHistorySnapshotFiltered pushes an exact probe-series selector into the bounded store
-	// scan. Zero options return resources and no probes; ProbeSeriesID returns only that exact series.
-	// This avoids materializing every probe attempt before an API response applies its selector.
+	// QueryTelemetryHistorySnapshotFiltered pushes probe and exact-device selection into the bounded
+	// store scan. Zero options return resources only; AllProbeSeries preserves legacy all-probe reads,
+	// while non-empty series IDs select only those exact series. There is no all-device option.
 	QueryTelemetryHistorySnapshotFiltered(ctx context.Context, t TenantID, nodeID string, from, to time.Time, options TelemetryHistoryQueryOptions) (TelemetryHistorySnapshot, error)
 
 	// --- Topology (public-keys-only) ---
@@ -624,6 +628,12 @@ type Store interface {
 	// the stored record with its assigned Version. The version is also retained in
 	// the bounded history (TopologyHistoryLimit; oldest pruned).
 	PutTopology(ctx context.Context, t TenantID, json []byte) (TopologyRecord, error)
+	// CompareAndSetTopology atomically verifies that the current topology still has
+	// expectedVersion, then stores json as the next retained version. Byte-identical json is an
+	// atomic compare-only no-op and does not consume a history slot. A version mismatch returns
+	// ErrTopologyChanged without modifying topology or history. Deploy allocation write-back must
+	// use this primitive so a concurrent operator save cannot be overwritten by a stale compile.
+	CompareAndSetTopology(ctx context.Context, t TenantID, expectedVersion int64, json []byte) (TopologyRecord, error)
 	// GetTopology returns the current topology, or ErrNotFound.
 	GetTopology(ctx context.Context, t TenantID) (TopologyRecord, error)
 	// ListTopologyVersions returns the retained versions, newest first

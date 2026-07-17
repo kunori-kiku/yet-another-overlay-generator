@@ -1,5 +1,5 @@
 # PRINCIPLES — YAOG (Yet Another Overlay Generator)
-<!-- updated: 2026-06-18 -->
+<!-- updated: 2026-07-17 -->
 
 Project-wide invariants. Every outline's Principles section inherits from these and may add
 subject-specific ones on top. The execute-implementation-plan skill loads this file during its
@@ -49,10 +49,10 @@ principle-risk assessment.
   unaffected. See `docs/design/controller-panel-design-spike-2026_06_07.md`.
 - **Protect the working self-/32 Babel announce path (MEDIUM):** it is the one announce mechanism
   verified to work; changes near `babel.go` redistribute logic must prove it byte-identical.
-- **Minimal dependencies (LOW):** Go stdlib `net/http` only; sole external dep is
-  `golang.zx2c4.com/wireguard/wgctrl`. *Scoped exception (controller-panel 2.0):* new deps
-  (Postgres driver, OIDC, KMS client) are permitted ONLY inside `internal/controller` / `cmd/agent`;
-  the compiler/renderer dep set stays frozen, and signing uses stdlib `crypto/ed25519`.
+- **Minimal dependencies (LOW):** keep the direct dependency set small and preserve the
+  compiler/render boundary. `wgctrl` provides WireGuard key handling; platform and authentication
+  code also use the narrowly scoped `x/sys`, `x/term`, and `x/crypto` modules. New dependencies need
+  a boundary justification, and signing uses stdlib `crypto/ed25519`.
 - **Key custody (HIGH, controller fleets):** for nodes managed by the controller, WireGuard PRIVATE
   keys are generated and held agent-side and NEVER reach the controller, its DB, or its bundles
   (zero-knowledge custody). The controller stores public keys only. This downgrades I5's *mechanism*

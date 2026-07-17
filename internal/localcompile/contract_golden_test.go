@@ -144,8 +144,8 @@ func loadTestSigner(t *testing.T) bundlesig.ConfigSigner {
 // counterpart) are masked, and the random/keygen-derived private-key material lives only
 // inside the (fixed-key) rendered Files, never as a separately-pinned output.
 //
-// The compiled Topology is summarized to its load-bearing allocator write-backs (overlay
-// IPs + the seven pin fields per edge) rather than re-serializing the whole input — those
+// The compiled Topology is summarized to its load-bearing allocator write-backs (overlay IPs plus
+// six sticky pinned_* fields and CompiledPort per edge) rather than re-serializing the whole input — those
 // write-backs ARE part of the contract (allocated pins/IPs/ports) while the echoed input
 // fields are not.
 type goldenArtifacts struct {

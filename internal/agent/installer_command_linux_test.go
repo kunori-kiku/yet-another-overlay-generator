@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrycap"
 )
 
 func TestInstallerGuardianForwardsArgumentAndExitStatusWithoutLeaseLeak(t *testing.T) {
@@ -36,7 +36,7 @@ func TestInstallerGuardianForwardsArgumentAndExitStatusWithoutLeaseLeak(t *testi
 	t.Setenv("YAOG_GUARDIAN_CAPABILITY", capabilityRecord)
 	t.Setenv("YAOG_GUARDIAN_LEAK", leaked)
 	// The launcher must replace, rather than append ambiguously beside, an inherited value.
-	t.Setenv(runtimecontract.InstallerCapabilityTelemetryPolicyV1Env, "spoofed")
+	t.Setenv(telemetrycap.InstallerPolicyV1Env, "spoofed")
 	script := `#!/usr/bin/env bash
 set -eu
 printf '%s' "${1:-}" > "$YAOG_GUARDIAN_ARG"

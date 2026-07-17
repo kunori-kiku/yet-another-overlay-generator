@@ -230,7 +230,7 @@ func allocationsFrom(result *compiler.CompileResult) *Allocations {
 }
 
 // healedEdges runs normalize.HealCollidingPins over a COPY of the input topology and returns the
-// resulting edges projected to {ID + the seven pin fields}, sorted by ID. The heal mutates in place,
+// resulting edges projected to {ID + CompiledPort + six pinned_* fields}, sorted by ID. The heal mutates in place,
 // so the copy keeps the oracle's compile path untouched; the projection is the surface the FE heal
 // canary byte-compares.
 func healedEdges(topo model.Topology) []HealedEdge {

@@ -31,9 +31,9 @@ type ExportResult struct {
 // BundleFiles builds a node's canonical, checksummed bundle file set as a path->content map:
 // every per-peer wireguard/<iface>.conf (WireGuardConfigs is keyed "nodeID:interfaceName"; a
 // client's single wg0 is "nodeID:wg0"), babel/babeld.conf (present for non-client nodes),
-// sysctl/99-overlay.conf, install.sh, README.txt, and artifacts.json only when a catalog produced
-// non-empty content (the D4 guard — an empty catalog omits the file so the offline bundle
-// stays byte-identical).
+// sysctl/99-overlay.conf, install.sh, README.txt, artifacts.json only when a catalog produced
+// non-empty content, and at most one optional AgentHeld telemetry policy member. An empty catalog
+// omits artifacts.json so the offline bundle stays byte-identical; AirGap omits telemetry policy.
 //
 // This is the SINGLE source for that set. Within Export the same map drives every view of
 // the bundle: the files WRITTEN to disk, the checksums.sha256 that COVER them, the
@@ -45,7 +45,7 @@ type ExportResult struct {
 // never drift. bundle.sig, signing-pubkey.pem and manifest.json are NOT members (they are the
 // authenticity/metadata layer over this set, not part of the checksummed bytes). README.txt is a
 // member: its custody-critical apply instructions must be checksum/signature/keystone-bound too.
-func BundleFiles(result *compiler.CompileResult, nodeID string) map[string]string {
+func BundleFiles(result *compiler.CompileResult, nodeID string) (map[string]string, error) {
 	bundleFiles := make(map[string]string)
 	for configKey, wgConf := range result.WireGuardConfigs {
 		parts := strings.SplitN(configKey, ":", 2)
@@ -66,8 +66,16 @@ func BundleFiles(result *compiler.CompileResult, nodeID string) map[string]strin
 	if artifactsJSON, ok := result.ArtifactsJSON[nodeID]; ok && artifactsJSON != "" {
 		bundleFiles["artifacts.json"] = artifactsJSON
 	}
-	if telemetryJSON, ok := result.TelemetryPolicyJSON[nodeID]; result.AgentHeld && ok && telemetryJSON != "" {
+	telemetryJSON := result.TelemetryPolicyJSON[nodeID]
+	successorJSON := result.TelemetrySuccessorPolicyJSON[nodeID]
+	if telemetryJSON != "" && successorJSON != "" {
+		return nil, fmt.Errorf("node %s contains both %s and %s", nodeID, probepolicy.FileName, probepolicy.SuccessorFileName)
+	}
+	if result.AgentHeld && telemetryJSON != "" {
 		bundleFiles[probepolicy.FileName] = telemetryJSON
+	}
+	if result.AgentHeld && successorJSON != "" {
+		bundleFiles[probepolicy.SuccessorFileName] = successorJSON
 	}
 	for i := range result.Topology.Nodes {
 		if result.Topology.Nodes[i].ID == nodeID {
@@ -75,7 +83,7 @@ func BundleFiles(result *compiler.CompileResult, nodeID string) map[string]strin
 			break
 		}
 	}
-	return bundleFiles
+	return bundleFiles, nil
 }
 
 func bundleREADME(result *compiler.CompileResult, node *model.Node) string {
@@ -104,7 +112,7 @@ func bundleREADME(result *compiler.CompileResult, node *model.Node) string {
 // It is the ONE place a member's mode is defined, so the mode a file is WRITTEN with can never
 // drift from the member set: install.sh is the root-executed trust anchor (0o755);
 // wireguard/<iface>.conf carries a private key (0o600); every other member —
-// babel/babeld.conf, sysctl/99-overlay.conf, artifacts.json — is world-readable config
+// babel/babeld.conf, sysctl/99-overlay.conf, artifacts.json, and telemetry policy — is readable config
 // (0o644). This reproduces exactly the per-file modes the pre-single-source write-loop used.
 func bundleFileMode(rel string) os.FileMode {
 	switch {
@@ -289,7 +297,10 @@ func exportInto(result *compiler.CompileResult, outputDir string, signer bundles
 		// demand. Members are written in sorted order so the run is deterministic; that same
 		// sorted key list is reused verbatim as manifest.json's "files" below (replacing the
 		// old wg-map-ordered — non-reproducible — list).
-		bundleFiles := BundleFiles(result, node.ID)
+		bundleFiles, err := BundleFiles(result, node.ID)
+		if err != nil {
+			return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(err)
+		}
 		if err := validateBundleMemberPaths(bundleFiles); err != nil {
 			return nil, apierr.New(apierr.CodeExportUnsafeName).With("name", node.ID).Wrap(err)
 		}
@@ -317,15 +328,15 @@ func exportInto(result *compiler.CompileResult, outputDir string, signer bundles
 		//
 		// The set matches the rest of the bundle exactly — it IS the set written just above:
 		// every per-peer wireguard/<iface>.conf, babel/babeld.conf (non-client only),
-		// sysctl/99-overlay.conf, and install.sh. install.sh is the root-executed trust anchor
+		// sysctl/99-overlay.conf, install.sh, README, and optional artifact/telemetry policy. install.sh is the root-executed trust anchor
 		// and was historically the only artifact not covered by checksums.sha256 (audit item
 		// D24). manifest.json is still deliberately excluded: it carries compile-time
 		// timestamps (compiled_at, etc.) and is out of integrity-check scope (see
 		// docs/spec/security/security.md). bundle.sig and signing-pubkey.pem (when signing is
 		// enabled) are also excluded by construction: bundle.sig signs this very content and
-		// the pubkey is the verification anchor, so neither can self-reference. (artifacts.json
-		// joins the set so its pins inherit the bundle's Ed25519 signature + keystone digest
-		// binding — no new trust primitive; omitted when absent, D4.)
+		// the pubkey is the verification anchor, so neither can self-reference. Optional artifacts
+		// and telemetry policy join the set so their authority inherits the same signature and
+		// keystone digest binding; both remain omitted when absent.
 		canonical := bundlesig.Canonicalize(bundleFiles)
 		checksumsPath := filepath.Join(nodeDir, "checksums.sha256")
 		if err := writeFileAtomic(checksumsPath, canonical, 0644); err != nil {

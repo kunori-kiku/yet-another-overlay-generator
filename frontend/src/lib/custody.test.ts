@@ -48,6 +48,28 @@ function node(overrides: Partial<ControllerNode> = {}): ControllerNode {
         failureReason: 'connection_refused',
       },
     ],
+    deviceInventory: {
+      devices: [{
+        seriesId: 'd'.repeat(64),
+        kind: 'filesystem',
+        label: 'customer-data',
+        parentSeriesId: 'b'.repeat(64),
+        mountPoint: '/srv/customer-secret',
+        fsType: 'ext4',
+        capacityBytes: 4096,
+        status: 'ok',
+      }],
+      truncated: 0,
+    },
+    deviceSamples: {
+      samples: [{
+        seriesId: 'd'.repeat(64),
+        kind: 'filesystem',
+        values: { disk_filesystem_used_pct: 73.25 },
+      }],
+      truncated: 0,
+    },
+    agentCapabilities: ['device-telemetry-v1', 'telemetry-policy-v2'],
     ...overrides,
   };
 }
@@ -66,10 +88,44 @@ describe('stripLiveTelemetry (persist custody)', () => {
   });
 
   it('omits active-probe results and their internal destination from browser persistence', () => {
-    const serialized = JSON.parse(JSON.stringify(stripLiveTelemetry(node())));
+    const serialized = JSON.parse(JSON.stringify(stripLiveTelemetry(node({
+      probeResults: [{
+        id: 'health',
+        type: 'url',
+        url: 'https://internal.example/health',
+        expectedStatus: 200,
+        actualStatus: 503,
+        status: 'failure',
+        latencyMS: 17,
+        failureReason: 'unexpected_status',
+      }],
+    }))));
     expect('probeResults' in serialized).toBe(false);
-    expect(JSON.stringify(serialized).includes('db.internal.example')).toBe(false);
-    expect(JSON.stringify(serialized).includes('5432')).toBe(false);
+    expect(JSON.stringify(serialized).includes('internal.example')).toBe(false);
+    expect(JSON.stringify(serialized).includes('503')).toBe(false);
+  });
+
+  it('omits device inventory, current readings, and every hardware sentinel from browser persistence', () => {
+    const serialized = JSON.parse(JSON.stringify(stripLiveTelemetry(node())));
+    const blob = JSON.stringify(serialized);
+    expect('deviceInventory' in serialized).toBe(false);
+    expect('deviceSamples' in serialized).toBe(false);
+    for (const sentinel of [
+      'd'.repeat(64),
+      'customer-data',
+      '/srv/customer-secret',
+      'ext4',
+      '73.25',
+      'device-telemetry-v1',
+    ]) {
+      expect(blob).not.toContain(sentinel);
+    }
+  });
+
+  it('omits live agent capability evidence so stale readiness cannot survive a reload', () => {
+    const serialized = JSON.parse(JSON.stringify(stripLiveTelemetry(node())));
+    expect('agentCapabilities' in serialized).toBe(false);
+    expect(JSON.stringify(serialized).includes('telemetry-policy-v2')).toBe(false);
   });
 
   it('keeps the aggregate wireguard condition and every other field intact', () => {
@@ -87,6 +143,9 @@ describe('stripLiveTelemetry (persist custody)', () => {
     stripLiveTelemetry(input);
     expect(input.wireguardPeers).toHaveLength(2);
     expect(input.probeResults?.[0].host).toBe('db.internal.example');
+    expect(input.deviceInventory?.devices[0].mountPoint).toBe('/srv/customer-secret');
+    expect(input.deviceSamples?.samples[0].values.disk_filesystem_used_pct).toBe(73.25);
+    expect(input.agentCapabilities).toEqual(['device-telemetry-v1', 'telemetry-policy-v2']);
   });
 
   it('is a no-op shape for a node that already has no telemetry (legacy/beta.11 cache)', () => {

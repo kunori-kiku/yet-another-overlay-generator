@@ -568,14 +568,9 @@ func TestParallelBackup_PrimaryStableBackupDistinct(t *testing.T) {
 // TestParallelBackup_OrderIndependence covers the stability property "I2 with a parallel
 // pair present": in a topology that already has a parallel link pair (primary + backup),
 // appending vs prepending the backup in topo.Edges must leave every other unrelated link's
-// (here A-C's) allocation values byte-for-byte identical — a backup is positional only in
-// its own resources and never affects others (property 5's "backups are positional only in
-// their own resources").
-//
-// Note: this test does not assert equality of the backup's own values across the two
-// compiles (property 5 explicitly accepts that a backup's delete/re-add is not idempotent,
-// and here the backup's edge.ID is the same in both topologies but at a different array
-// position). The gate locks down "other links are not perturbed by the backup's position".
+// (here A-C's) allocation values byte-for-byte identical. A backup has an edge-ID-qualified
+// identity, so its array position cannot perturb the primary or unrelated reserved resources.
+// Delete/re-add with a newly minted backup ID is the explicit fresh-identity case.
 func TestParallelBackup_OrderIndependence(t *testing.T) {
 	c := NewCompiler()
 	keys := stableKeys()

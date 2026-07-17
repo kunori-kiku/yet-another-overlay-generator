@@ -2,9 +2,10 @@ import { useControllerStore } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { t } from '../../i18n';
 
-// AuditLog displays the controller audit chain (key operator/agent actions) + a badge for whether the
-// hash chain is intact. The entries themselves are returned by the backend in Seq order (earliest
-// first). verified=false means the chain was tampered with or broken.
+// AuditLog displays the controller audit chain's meaningful operator/security/lifecycle actions + a
+// badge for whether the COMPLETE hash chain is intact. Older controllers stored high-frequency bare
+// agent "report" entries; retain them in the fetched chain for verification/API compatibility, but
+// omit them from the operator table because their useful state already lives in Fleet.
 function fmtTime(iso: string): string {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -15,6 +16,7 @@ export function AuditLog() {
   const language = useTopologyStore((s) => s.language);
   const audit = useControllerStore((s) => s.audit);
   const auditVerified = useControllerStore((s) => s.auditVerified);
+  const visibleAudit = audit.filter((entry) => entry.action !== 'report');
 
   return (
     <section className="bg-[var(--surface-elevated)] border border-[var(--hairline)] p-4 rounded-lg space-y-3">
@@ -34,7 +36,7 @@ export function AuditLog() {
           ))}
       </div>
 
-      {audit.length === 0 ? (
+      {visibleAudit.length === 0 ? (
         <p className="text-sm text-[var(--content-muted)] italic">
           {t(language, 'auditLog.noAuditEntriesConfigure')}
         </p>
@@ -50,7 +52,7 @@ export function AuditLog() {
               </tr>
             </thead>
             <tbody>
-              {audit.map((e, i) => (
+              {visibleAudit.map((e, i) => (
                 <tr key={`${e.timestamp}-${i}`} className="border-b border-[var(--hairline)]">
                   <td className="py-1.5 pr-3 text-[var(--content-muted)] text-xs whitespace-nowrap">
                     {fmtTime(e.timestamp)}

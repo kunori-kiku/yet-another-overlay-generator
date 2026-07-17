@@ -58,11 +58,11 @@ type CompileResult struct {
 	// It is a signed bundleFiles member — the install.sh reads its pins after integrity verify.
 	ArtifactsJSON map[string]string
 
-	// TelemetryPolicyJSON holds the versioned per-node active-probe policy. It is empty for
-	// nodes without probes, preserving their historical bundle bytes. For AgentHeld results,
-	// the artifact exporter includes each non-empty value as telemetry.json in the
-	// checksummed/signed member set; air-gap exports intentionally omit agent-only policy.
-	TelemetryPolicyJSON map[string]string
+	// TelemetryPolicyJSON holds frozen telemetry.json v1. TelemetrySuccessorPolicyJSON holds the
+	// separately named strict successor. A node may occupy at most one map; BundleFiles rejects both.
+	// AgentHeld exports include the one non-empty member, while air-gap exports omit agent policy.
+	TelemetryPolicyJSON          map[string]string
+	TelemetrySuccessorPolicyJSON map[string]string
 
 	// DeployScripts holds the auto-generated deploy script per node.
 	DeployScripts map[string]string
@@ -78,6 +78,34 @@ type CompileResult struct {
 
 	// Manifest is the compile manifest summarizing this build.
 	Manifest CompileManifest
+}
+
+// TopologyValidationError preserves the structured findings from the compiler's schema or
+// semantic validation pass. Callers can inspect it with errors.As and surface the validator's
+// stable code, field, and interpolation parameters without parsing the human-readable Error
+// string. The compiler package owns this wrapper because validator findings deliberately remain
+// a separate channel from HTTP apierr codes.
+type TopologyValidationError struct {
+	Phase    string
+	Findings []validator.ValidationError
+}
+
+func (e *TopologyValidationError) Error() string {
+	return fmt.Sprintf("topology failed %s validation: %v", e.Phase, e.Findings)
+}
+
+func newTopologyValidationError(phase string, findings []validator.ValidationError) *TopologyValidationError {
+	cloned := make([]validator.ValidationError, len(findings))
+	for i, finding := range findings {
+		cloned[i] = finding
+		if finding.Params != nil {
+			cloned[i].Params = make(map[string]string, len(finding.Params))
+			for key, value := range finding.Params {
+				cloned[i].Params[key] = value
+			}
+		}
+	}
+	return &TopologyValidationError{Phase: phase, Findings: cloned}
 }
 
 // CompileManifest summarizes a compile: project identity, version, timestamp, node count, and checksum.
@@ -153,13 +181,13 @@ func (c *Compiler) CompileAt(ctx context.Context, topo *model.Topology, keys map
 	// Pass 1: Schema validation.
 	schemaResult := validator.ValidateSchema(topo)
 	if !schemaResult.IsValid() {
-		return nil, fmt.Errorf("topology failed schema validation: %v", schemaResult.Errors)
+		return nil, newTopologyValidationError("schema", schemaResult.Errors)
 	}
 
 	// Pass 2: Semantic validation.
 	semanticResult := validator.ValidateSemantic(topo)
 	if !semanticResult.IsValid() {
-		return nil, fmt.Errorf("topology failed semantic validation: %v", semanticResult.Errors)
+		return nil, newTopologyValidationError("semantic", semanticResult.Errors)
 	}
 
 	// Collect the non-fatal warnings from both validation stages and return them with the compile
@@ -217,8 +245,25 @@ func (c *Compiler) CompileAt(ctx context.Context, topo *model.Topology, keys map
 	//   - when EndpointPort > 0 (an explicit operator NAT/port-forward override), reflect that
 	//     override value verbatim;
 	//   - otherwise use the peer interface's allocated listen port (compiler-assigned).
+	roleByNode := make(map[string]string, len(compiledTopo.Nodes))
+	for i := range compiledTopo.Nodes {
+		roleByNode[compiledTopo.Nodes[i].ID] = compiledTopo.Nodes[i].Role
+	}
 	for i := range compiledTopo.Edges {
 		edge := &compiledTopo.Edges[i]
+		// A client owns one shared wg0 rather than a per-link interface, so only the port
+		// field on the client endpoint itself is meaningless. Clear that side even on a
+		// disabled edge, where validation/allocation otherwise deliberately do nothing; this
+		// makes a compile converge stale role-flip data before the edge is enabled again. The
+		// non-client endpoint still owns a real per-link interface and listen port, and the
+		// transit/link-local pair is used by that router-side interface, so those allocations
+		// remain sticky and are written back below.
+		if roleByNode[edge.FromNodeID] == "client" {
+			edge.PinnedFromPort = 0
+		}
+		if roleByNode[edge.ToNodeID] == "client" {
+			edge.PinnedToPort = 0
+		}
 		if !edge.IsEnabled {
 			continue
 		}
@@ -237,6 +282,15 @@ func (c *Compiler) CompileAt(ctx context.Context, topo *model.Topology, keys map
 		// otherwise mirror them.
 		isForward := alloc.fromNodeID == edge.FromNodeID
 		edge.PinnedFromPort, edge.PinnedToPort, edge.PinnedFromTransitIP, edge.PinnedToTransitIP, edge.PinnedFromLinkLocal, edge.PinnedToLinkLocal = alloc.oriented(isForward)
+		// Enforce the endpoint contract at the final write boundary as well as in allocation.
+		// This keeps the compiled topology correct even if a future allocator path accidentally
+		// carries a stale client-side port in pairAllocations.
+		if roleByNode[edge.FromNodeID] == "client" {
+			edge.PinnedFromPort = 0
+		}
+		if roleByNode[edge.ToNodeID] == "client" {
+			edge.PinnedToPort = 0
+		}
 
 		// CompiledPort: written back only for edges with endpoint_host (matching the rendered
 		// Endpoint port).
@@ -256,17 +310,18 @@ func (c *Compiler) CompileAt(ctx context.Context, topo *model.Topology, keys map
 	}
 
 	result := &CompileResult{
-		Topology:            compiledTopo,
-		PeerMap:             peerMap,
-		WireGuardConfigs:    make(map[string]string),
-		BabelConfigs:        make(map[string]string),
-		SysctlConfigs:       make(map[string]string),
-		InstallScripts:      make(map[string]string),
-		ArtifactsJSON:       make(map[string]string),
-		TelemetryPolicyJSON: make(map[string]string),
-		DeployScripts:       make(map[string]string),
-		ClientConfigs:       clientConfigs,
-		Warnings:            warnings,
+		Topology:                     compiledTopo,
+		PeerMap:                      peerMap,
+		WireGuardConfigs:             make(map[string]string),
+		BabelConfigs:                 make(map[string]string),
+		SysctlConfigs:                make(map[string]string),
+		InstallScripts:               make(map[string]string),
+		ArtifactsJSON:                make(map[string]string),
+		TelemetryPolicyJSON:          make(map[string]string),
+		TelemetrySuccessorPolicyJSON: make(map[string]string),
+		DeployScripts:                make(map[string]string),
+		ClientConfigs:                clientConfigs,
+		Warnings:                     warnings,
 		Manifest: CompileManifest{
 			ProjectID:   topo.Project.ID,
 			ProjectName: topo.Project.Name,

@@ -238,10 +238,14 @@ func validateMetrics(metrics map[string]json.RawMessage) *apierr.Error {
 }
 
 // HandleReport records an agent's apply outcome for ITSELF: SetAppliedGeneration +
-// TouchLastSeen + an audit entry. The node is the bearer token's node; the report
-// body carries only the applied generation, checksum, and a health string. Routed
-// through op() (routes_controller.go): the adapter runs the method guard + structural
-// identity() check before this body.
+// TouchLastSeen. The node is the bearer token's node; the report body carries only
+// the applied generation, checksum, health, version, and bounded conditions. This is
+// operational Fleet state, not a durable security/operator audit event: a failing
+// apply can retry every few seconds, and appending the same content-free "report"
+// action each time would flood/rotate the hash-chained audit and add synchronous disk
+// work while conveying none of the report's useful fields. Routed through op()
+// (routes_controller.go): the adapter runs the method guard + structural identity()
+// check before this body.
 func (h *ControllerHandler) HandleReport(ctx context.Context, tenant controller.TenantID, node string, w http.ResponseWriter, r *http.Request) (any, *apierr.Error) {
 	var req reportRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
@@ -261,14 +265,6 @@ func (h *ControllerHandler) HandleReport(ctx context.Context, tenant controller.
 		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 	_ = h.store.TouchLastSeen(ctx, tenant, node, now)
-	if _, err := h.store.AppendAudit(ctx, tenant, controller.AuditEntry{
-		Timestamp: now,
-		Actor:     "agent:" + node,
-		Action:    "report",
-		NodeID:    node,
-	}); err != nil {
-		return nil, codedErr(apierr.CodeInternalStorage, err)
-	}
 	return map[string]string{"status": "ok"}, nil
 }
 
@@ -338,14 +334,13 @@ func writeTelemetryReceiptHeaders(w http.ResponseWriter, metadata *telemetryRequ
 }
 
 // HandleTelemetry records a LIVE health heartbeat from the CALLER (the node from the bearer token,
-// never the request body) — beta9-smoke-hardening plan-1. Unlike HandleReport it carries NO
-// applied_generation/checksum and writes the node's last_seen, conditions, volatile current metrics,
-// and bounded cadence history via RecordTelemetry: telemetry is high-frequency observability kept
-// strictly separate from deploy custody, so a heartbeat can never advance or regress the applied
-// generation. It is INTENTIONALLY NOT audited — a 30s
-// heartbeat would flood the hash-chained audit log (HandleReport's append); do not "fix" the
-// asymmetry by adding an audit entry here. Conditions are server-stamped with the controller clock
-// inside the store (a node clock cannot be trusted for ageing). The validated metrics map (the
+// never the request body) — beta9-smoke-hardening plan-1. It carries NO applied_generation/checksum
+// and writes the node's last_seen, conditions, volatile current metrics, and bounded cadence history
+// via RecordTelemetry: telemetry is high-frequency observability kept strictly separate from deploy
+// custody, so a heartbeat can never advance or regress the applied generation. Both routine
+// endpoints are intentionally outside the durable audit chain because their useful high-frequency
+// state is represented in Fleet. Conditions are server-stamped with the controller clock inside the
+// store (a node clock cannot be trusted for ageing). The validated metrics map (the
 // framework's extension slot — e.g. resource and probe results) feeds bounded history in full; only
 // its cataloged live-visible subset feeds node.telemetry. It is not durable deploy state.
 // Returns {status:"ok"}. Routed through op() (routes_controller.go): the adapter runs the method

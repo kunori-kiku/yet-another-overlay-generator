@@ -62,7 +62,7 @@ func (h *ControllerHandler) HandleUpdateTopology(ctx context.Context, tenant con
 		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 
-	rec, err := h.store.PutTopology(ctx, tenant, canonical)
+	rec, err := controller.SaveTopology(ctx, h.store, tenant, canonical)
 	if err != nil {
 		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}

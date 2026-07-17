@@ -12,8 +12,8 @@ dependency.
 
 **Scope (plan-4.5).** Controller-side and CI-testable at the function level: the enrollment-token
 contract, the per-node API-token minting, and the `Enroll` ceremony that ties them to the `Store`. See
-[../../../implementation_plans/controller-panel-2026_06_08/plan-4.5-2026_06_08.md](../../../implementation_plans/controller-panel-2026_06_08/plan-4.5-2026_06_08.md)
-and the parent [plan-4-2026_06_08.md](../../../implementation_plans/controller-panel-2026_06_08/plan-4-2026_06_08.md).
+[../../../implementation_plans/_completed/controller-panel-2026_06_08/plan-4.5-2026_06_08.md](../../../implementation_plans/_completed/controller-panel-2026_06_08/plan-4.5-2026_06_08.md)
+and the parent [plan-4-2026_06_08.md](../../../implementation_plans/_completed/controller-panel-2026_06_08/plan-4-2026_06_08.md).
 
 > **Retraction (2026-06-08).** An earlier revision of this spec specified an ephemeral **`DevCA`**
 > (`NewDevCA`, `IssueClientCert`, `IssueServerCert`, `ServerTLSConfig`, `CACertPEM`, `CACertPool`) and a

@@ -57,7 +57,7 @@ bytes, so it is deliberately not a request field.
 
 | Field | Type | Meaning | Conformance |
 |-------|------|---------|-------------|
-| `Topology` | `*model.Topology` | The compiled topology with allocator write-backs applied: the seven `model.Edge` pin fields + `OverlayIP` + `RouterID` per node. | allocated values **IN**; echoed input **n/a** |
+| `Topology` | `*model.Topology` | The compiled topology with allocator write-backs applied: six sticky `model.Edge.pinned_*` fields plus `compiled_port`, and `OverlayIP` + `RouterID` per node. | allocated values **IN**; echoed input **n/a** |
 | `Files` | `map[string]map[string]string` | Per-node bundle set: `nodeID -> relpath -> content` (see §3). | **IN** |
 | `Deploy` | `map[string]string` | Project-level custody-aware helpers (`deploy-all.sh` / `deploy-all.ps1`): operational SSH scripts for AirGap, fail-closed guidance stubs for AgentHeld. | **IN** |
 | `Checksums` | `map[string]string` | `nodeID -> checksums.sha256` content, via `bundlesig.Canonicalize` (see §2). | **IN** |
@@ -105,6 +105,8 @@ checksummed set — exactly the bytes `Checksums` and (when signing on) `Signatu
 | `install.sh` | every node | Install / uninstall script (verifies root, splices keys, applies the SNAT fix). |
 | `README.txt` | every node | Human usage and custody guidance. It is a member so an untrusted delivery cannot rewrite the AgentHeld application instructions without invalidating integrity. |
 | `artifacts.json` | when a catalog is configured | The controller-signed mimic/agent-update pins. **Omitted entirely when no catalog is configured**, so a non-catalog bundle stays byte-identical. A signed member (its pins inherit the bundle's signature + keystone digest). |
+| `telemetry.json` | AgentHeld ICMP/TCP-only policy | Optional strict version-1 active-telemetry member; omitted when no active policy exists and mutually exclusive with `telemetry-policy.json`. |
+| `telemetry-policy.json` | AgentHeld URL/device policy | Optional strict version-2 successor member; emitted whenever URL probes or automatic devices are configured and mutually exclusive with `telemetry.json`. |
 
 `bundle.sig` / `signing-pubkey.pem` (when signing on), `checksums.sha256`, and `manifest.json` are
 **not** members of the checksummed set: the first two are the authenticity layer over it,
@@ -114,7 +116,9 @@ represented separately rather than in `Files`.
 This per-node set is **single-sourced**: both the in-memory `CompileArtifacts.Files`
 (`localcompile.ArtifactsFromResult`) and the on-disk bundle (`artifacts.Export`) build it through
 the one `artifacts.BundleFiles(result, nodeID)` helper, so the relpath keys + set membership (incl.
-the `artifacts.json` D4 guard) can never drift between the two. (The helper lives in `artifacts`, a
+the optional artifacts/telemetry guards) can never drift between the two. Telemetry policy is omitted
+from AirGap custody; in AgentHeld custody either version is checksummed, optionally tier-1 signed, and
+bound by the required off-host keystone before activation. (The helper lives in `artifacts`, a
 sink package — `apierr`/`bundlesig`/`compiler` only — which `localcompile` imports freely; the
 reverse direction would cycle, since `render`'s tests depend on `artifacts` and `localcompile`
 depends on `render`.)
@@ -160,21 +164,23 @@ package shared by validation, export, and rendering.
 
 ### 4.3 `internal/normalize` — pin-collision heal
 
-`HealCollidingPins` (`internal/normalize/pins.go`) repairs the "pin occupied by two different links"
-corruption: an edge whose pinned port / transit IP / link-local collides with another **enabled**
-edge of a **different** `LinkKey` has its whole allocation stripped (re-allocated fresh next compile).
+`HealCollidingPins` (`internal/normalize/pins.go`) first clears only a port attached to a client
+endpoint; the opposite non-client port and complete transit/link-local pairs remain sticky. It also
+repairs the "pin occupied by two different links" corruption: an edge whose valid pinned port /
+transit IP / link-local collides with another **enabled** edge of a **different** `LinkKey` has its
+whole allocation stripped (re-allocated fresh next compile).
 It is the inverse of the semantic validator's cross-link dedup and the browser-side mirror of
 `frontend/src/lib/normalizeEdges.ts`. Discriminator: claims are processed in **`LinkKey`-sorted order**
 (mirroring the allocator's reserve-first gap-fill); the first claimant keeps the slot, every later
 different-link claimant is stripped as a unit. Result is always collision-free, deterministic, and a
 stable fixed point. `canonicalIP(value)` (`net.ParseIP(value).String()` when parseable, else the raw
-value) defines the heal's notion of "same address" and **mirrors `internal/validator/semantic.go`'s
+value) defines the heal's notion of "same address" and **mirrors `internal/validator/semantic_pins.go`'s
 `canonicalIP`** exactly — what the heal strips is precisely what the validator flags.
 
 ### 4.4 The model pin-tag set — `model.Edge`
 
-The **seven** JSON tags on `model.Edge` (`internal/model/topology.go`) that the compiler writes back,
-the frontend persists to localStorage, and the round-trip preserves verbatim:
+The compiler writes seven server-derived allocation fields on `model.Edge`
+(`internal/model/topology.go`):
 
 ```
 compiled_port
@@ -183,11 +189,18 @@ pinned_from_transit_ip  pinned_to_transit_ip
 pinned_from_link_local  pinned_to_link_local
 ```
 
-`frontend/src/lib/normalizeEdges.ts`'s `PIN_FIELDS` array mirrors this exact set. **There is no Go
-symbol named `PIN_FIELDS`** — the Go authority is the struct-tag set itself; the TS `PIN_FIELDS`
-constant is the mirror, and the drift-guard (plan-5) pins them equal. Each resource is a pair: an
-edge is either fully pinned (both ends) or not at all; a single-ended pin is rejected by the
-validator.
+The six `pinned_*` fields are persisted sticky allocation state. `compiled_port` is a read-only echo
+of the effective dial target and is not the sticky authority. The frontend leaf catalog
+`frontend/src/lib/allocationFields.ts` therefore exposes
+`PERSISTED_ALLOCATION_PIN_FIELDS` (the exact six) and `SERVER_ALLOCATION_FIELDS`
+(`compiled_port` followed by those six) for reconciliation/custody clearing. The Go drift guard
+checks that every persisted name remains a real `model.Edge` JSON tag; the frontend unit test checks
+both exact sets and their composition.
+
+Transit and link-local allocations are complete pairs. Ports are also paired on ordinary links. A
+client link is the endpoint-specific exception: the client endpoint has no per-link port, while the
+non-client endpoint retains one valid sticky port. Any other single-ended resource is rejected by
+the validator.
 
 ---
 
@@ -261,8 +274,8 @@ What the cross-language byte-equality assertions cover, and what they deliberate
 - The project-level custody-aware `Deploy` helpers (`deploy-all.sh` / `deploy-all.ps1`). AirGap
   output is operational; AgentHeld output must remain a non-executing guidance stub.
 - The per-node `Checksums` (`checksums.sha256`, via `Canonicalize`).
-- The allocated values written back onto the topology: `OverlayIP` per node and the seven pin fields
-  per edge (allocated ports / transit IPs / link-locals — §4.4).
+- The allocation outputs written back onto the topology: `OverlayIP` per node and, per edge, the six
+  sticky `pinned_*` fields plus `compiled_port` (allocated ports / transit IPs / link-locals — §4.4).
 - WireGuard public-key **derivation** (`DerivePublic` / `ParseAndNormalize`), proven via the
   X25519 equivalence test and asserted indirectly through the rendered configs.
 - `bundle.sig` (`Signatures`) and `signing-pubkey.pem` (`SigningPubPEM`) **when signing is on** — the

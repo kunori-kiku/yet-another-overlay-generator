@@ -1,14 +1,21 @@
 import { describe, it, expect } from 'vitest';
-import { clearedPinFields, PIN_FIELDS, sanitizeLinkDirection } from './normalizeEdges';
-import type { Edge } from '../types/topology';
+import {
+  clearedPinFields,
+  healCollidingPins,
+  sanitizeLinkDirection,
+} from './normalizeEdges';
+import {
+  PERSISTED_ALLOCATION_PIN_FIELDS,
+  SERVER_ALLOCATION_FIELDS,
+} from './allocationFields';
+import type { Edge, Node } from '../types/topology';
 
 // sanitizeLinkDirection unit contract: the panel-load coercion of out-of-enum link_direction
 // values to undefined (≡ "both"). healCollidingPins' byte-parity with the Go heal is pinned
 // separately by heal.conformance.test.ts; this suite covers only the direction sanitize.
 //
-// clearedPinFields contract: the single-sourced pin-clear payload used by the three deliberate
-// pin-reset sites (EdgeEditor role-change / unpin, store purgeModeBoundaryState) — pinned so it
-// stays exactly the PIN_FIELDS set and can't silently drift.
+// clearedPinFields contract: the single-sourced allocation-clear payload used by deliberate reset
+// sites. The two independent oracles below distinguish the six sticky pins from compiled_port.
 
 function edge(overrides: Partial<Edge> & { link_direction?: unknown }): Edge {
   return {
@@ -63,10 +70,7 @@ describe('sanitizeLinkDirection', () => {
 });
 
 describe('clearedPinFields', () => {
-  // The seven allocation-pin edge fields, hard-coded as an INDEPENDENT oracle: if PIN_FIELDS grows
-  // or shrinks, this forces a deliberate test update rather than the helper drifting silently.
-  const EXPECTED_PIN_FIELDS = [
-    'compiled_port',
+  const EXPECTED_PERSISTED_FIELDS = [
     'pinned_from_port',
     'pinned_to_port',
     'pinned_from_transit_ip',
@@ -74,18 +78,29 @@ describe('clearedPinFields', () => {
     'pinned_from_link_local',
     'pinned_to_link_local',
   ];
+  const EXPECTED_SERVER_FIELDS = ['compiled_port', ...EXPECTED_PERSISTED_FIELDS];
 
-  it('PIN_FIELDS is exactly the seven allocation-pin fields (single source of truth)', () => {
-    expect([...PIN_FIELDS].sort()).toEqual([...EXPECTED_PIN_FIELDS].sort());
+  it('keeps exactly the six persisted sticky pin fields', () => {
+    expect([...PERSISTED_ALLOCATION_PIN_FIELDS]).toEqual(EXPECTED_PERSISTED_FIELDS);
   });
 
-  it('clears exactly the PIN_FIELDS set — keys PRESENT with undefined values', () => {
+  it('keeps exactly the seven server-derived allocation fields', () => {
+    expect([...SERVER_ALLOCATION_FIELDS]).toEqual(EXPECTED_SERVER_FIELDS);
+  });
+
+  it('defines the server fields as compiled_port followed by the persisted pins', () => {
+    expect([...SERVER_ALLOCATION_FIELDS]).toEqual([
+      'compiled_port',
+      ...PERSISTED_ALLOCATION_PIN_FIELDS,
+    ]);
+  });
+
+  it('clears exactly the server-derived set — keys PRESENT with undefined values', () => {
     const payload = clearedPinFields();
-    // Exactly the PIN_FIELDS keys — no more, no fewer.
-    expect(Object.keys(payload).sort()).toEqual([...PIN_FIELDS].sort());
+    expect(Object.keys(payload).sort()).toEqual([...SERVER_ALLOCATION_FIELDS].sort());
     // Each key is PRESENT (so spreading it over an edge actually RESETS the field, not merely
     // leaving a stale value in place) AND holds undefined.
-    for (const f of PIN_FIELDS) {
+    for (const f of SERVER_ALLOCATION_FIELDS) {
       expect(f in payload).toBe(true);
       expect((payload as Record<string, unknown>)[f]).toBeUndefined();
     }
@@ -117,7 +132,7 @@ describe('clearedPinFields', () => {
       notes: 'keep me',
     });
     const cleared: Edge = { ...pinned, ...clearedPinFields() };
-    for (const f of PIN_FIELDS) {
+    for (const f of SERVER_ALLOCATION_FIELDS) {
       expect((cleared as Record<string, unknown>)[f]).toBeUndefined();
     }
     // Non-pin fields survive the spread.
@@ -125,5 +140,69 @@ describe('clearedPinFields', () => {
     expect(cleared.id).toBe('e1');
     // The input edge is not mutated.
     expect(pinned.compiled_port).toBe(51820);
+  });
+});
+
+describe('healCollidingPins client migration', () => {
+  it('clears only the client endpoint port and preserves the live allocation', () => {
+    const nodes: Node[] = [
+      { id: 'client', name: 'client', role: 'client', domain_id: 'domain' },
+      { id: 'router', name: 'router', role: 'router', domain_id: 'domain' },
+    ];
+    const legacy = edge({
+      from_node_id: 'client',
+      to_node_id: 'router',
+      compiled_port: 51829,
+      pinned_from_port: 51900,
+      pinned_to_port: 51829,
+      pinned_from_transit_ip: '10.10.0.9',
+      pinned_to_transit_ip: '10.10.0.10',
+      pinned_from_link_local: 'fe80::9',
+      pinned_to_link_local: 'fe80::a',
+      notes: 'keep me',
+    });
+
+    const input = [legacy];
+    const out = healCollidingPins(input, nodes);
+    expect(out).not.toBe(input);
+    expect(out[0].compiled_port).toBe(51829);
+    expect(out[0].notes).toBe('keep me');
+    expect('pinned_from_port' in out[0]).toBe(false);
+    expect(out[0].pinned_to_port).toBe(51829);
+    expect(out[0].pinned_from_transit_ip).toBe('10.10.0.9');
+    expect(out[0].pinned_to_transit_ip).toBe('10.10.0.10');
+    expect(out[0].pinned_from_link_local).toBe('fe80::9');
+    expect(out[0].pinned_to_link_local).toBe('fe80::a');
+    expect(healCollidingPins(out, nodes)).toBe(out);
+  });
+
+  it('leaves non-positive ordinary-link ports for validation instead of claiming them', () => {
+    const nodes: Node[] = [
+      { id: 'a', name: 'a', role: 'router', domain_id: 'domain' },
+      { id: 'b', name: 'b', role: 'router', domain_id: 'domain' },
+      { id: 'c', name: 'c', role: 'router', domain_id: 'domain' },
+    ];
+    const edges = [
+      edge({
+        id: 'a-b',
+        from_node_id: 'a',
+        to_node_id: 'b',
+        pinned_from_port: -1,
+        pinned_to_port: -2,
+        pinned_from_transit_ip: '10.10.0.1',
+        pinned_to_transit_ip: '10.10.0.2',
+      }),
+      edge({
+        id: 'a-c',
+        from_node_id: 'a',
+        to_node_id: 'c',
+        pinned_from_port: -1,
+        pinned_to_port: -3,
+        pinned_from_transit_ip: '10.10.0.3',
+        pinned_to_transit_ip: '10.10.0.4',
+      }),
+    ];
+
+    expect(healCollidingPins(edges, nodes)).toBe(edges);
   });
 });

@@ -66,7 +66,9 @@ const authContextReset = {
   previewing: false,
   deployPreview: null,
   deployPreviewing: false,
+  deployPreviewMode: 'normal',
   deployPreviewError: null,
+  telemetryPolicyUpgradeOffer: null,
   pendingShrink: null,
   lastFleetSyncedAt: null,
 } as const;
@@ -103,6 +105,7 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
     csrfToken: '',
     loggedIn: false,
     controllerVersion: '',
+    controllerCapabilities: [],
 
     totpRequired: false,
     totpEnabled: null,
@@ -138,6 +141,7 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
           operatorName: null,
           sessionExpiresAt: null,
           controllerVersion: '',
+          controllerCapabilities: [],
           operatorToken: partial.operatorToken ?? '',
           operatorCredentialId: null,
           operatorCredentialAlg: null,
@@ -156,7 +160,9 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
           pendingShrink: null,
           deployPreview: null,
           deployPreviewing: false,
+          deployPreviewMode: 'normal',
           deployPreviewError: null,
+          telemetryPolicyUpgradeOffer: null,
           ...serverKeystoneReset,
         } : {}),
       });
@@ -213,6 +219,7 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
                 operatorName: after.result.operator,
                 sessionExpiresAt: after.result.expiresAt,
                 controllerVersion: after.result.controllerVersion,
+                controllerCapabilities: after.result.controllerCapabilities,
               });
               const establishedGeneration = get().authGeneration;
               await hydrateAuthenticatedContext(get, establishedGeneration);
@@ -256,6 +263,7 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
           operatorName: outcome.result.operator,
           sessionExpiresAt: outcome.result.expiresAt,
           controllerVersion: outcome.result.controllerVersion,
+          controllerCapabilities: outcome.result.controllerCapabilities,
         });
         const establishedGeneration = get().authGeneration;
         await hydrateAuthenticatedContext(get, establishedGeneration);
@@ -299,6 +307,7 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
         operatorName: null,
         sessionExpiresAt: null,
         controllerVersion: '',
+        controllerCapabilities: [],
         nodes: [],
         audit: [],
         auditVerified: false,
@@ -306,7 +315,9 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
         // transient, session-scoped operator action and must never survive a session change.
         deployPreview: null,
         deployPreviewing: false,
+        deployPreviewMode: 'normal',
         deployPreviewError: null,
+        telemetryPolicyUpgradeOffer: null,
         // Clear settings too, so a different operator signing in re-fetches them
         // (the guarded loadSettings effect re-fires on settings===null).
         settings: null,
@@ -379,6 +390,7 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
             sessionExpiresAt: info.expiresAt || null,
             csrfToken: info.csrfToken,
             controllerVersion: info.controllerVersion,
+            controllerCapabilities: info.controllerCapabilities,
           });
           const activeGeneration = get().authGeneration;
           // Status belongs to the now-established identity. The action has its own generation
@@ -415,6 +427,7 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
             sessionExpiresAt: null,
             csrfToken: '',
             controllerVersion: info?.controllerVersion ?? '',
+            controllerCapabilities: info?.controllerCapabilities ?? [],
             lastSyncedSnapshot: null,
             lastSyncedTopology: null,
             saveConflict: false,
@@ -439,6 +452,7 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
           operatorName: null,
           sessionExpiresAt: null,
           controllerVersion: '',
+          controllerCapabilities: [],
           lastSyncedSnapshot: null,
           lastSyncedTopology: null,
           saveConflict: false,
@@ -542,6 +556,7 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
           operatorName: result.operator,
           sessionExpiresAt: result.expiresAt,
           controllerVersion: result.controllerVersion,
+          controllerCapabilities: result.controllerCapabilities,
         });
         const establishedGeneration = get().authGeneration;
         await hydrateAuthenticatedContext(get, establishedGeneration);

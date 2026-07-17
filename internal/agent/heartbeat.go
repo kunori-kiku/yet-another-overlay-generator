@@ -55,6 +55,9 @@ func RunHeartbeat(poster TelemetryPoster, tel *Telemetry, interval time.Duration
 		runReliableHeartbeat(reliable, tel, interval, kick, done, stderr)
 		return
 	}
+	completionKick := make(chan struct{}, 1)
+	tel.setTelemetryCompletionKick(func() { TryKick(completionKick) })
+	defer tel.setTelemetryCompletionKick(nil)
 	beat := func() {
 		// A panic anywhere in a beat (a sampler outside its own guard, the merge, or the POST) must
 		// NOT kill this goroutine — it is the ONLY thing that refreshes Last Seen after apply time, so
@@ -94,6 +97,10 @@ func RunHeartbeat(poster TelemetryPoster, tel *Telemetry, interval time.Duration
 			// interval — and history/cpu_pct gain a sample at the deploy instant. The SAME beat() on the
 			// SAME single goroutine over the SAME Telemetry instance, so resourceSampler's cpu delta and
 			// the "no locking needed" invariant stay intact.
+			beat()
+		case <-completionKick:
+			// Independent metric cadence completed. Coalesce bursts and capture the new observation
+			// promptly even when the configured heartbeat interval is slower.
 			beat()
 		}
 	}

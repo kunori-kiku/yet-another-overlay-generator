@@ -12,6 +12,7 @@ import {
   RANGE_PRESETS,
   RANGE_SECONDS,
   createLatestRequestCoordinator,
+  deviceMetricSeries,
   formatHistoryResolution,
   granularityStep,
   historyQueryString,
@@ -31,7 +32,7 @@ import {
 
 describe('history chart families', () => {
   it('keeps the frontend parser authority explicit and ordered', () => {
-    expect(HISTORY_CHART_FAMILIES).toEqual(['resource', 'probe']);
+    expect(HISTORY_CHART_FAMILIES).toEqual(['resource', 'probe', 'device']);
   });
 });
 
@@ -87,6 +88,7 @@ describe('historyQueryString', () => {
     expect(p.get('from')).toBe('2026-07-13T06:00:00Z');
     expect(p.get('to')).toBe('2026-07-13T12:00:00Z');
     expect(p.has('step')).toBe(false);
+    expect(p.get('include_devices')).toBe('false');
     expect(q).toContain('%3A'); // colons are percent-encoded on the wire
   });
 
@@ -105,11 +107,39 @@ describe('historyQueryString', () => {
     expect(selected.get('probe_port')).toBe('5432');
     expect(selected.has('include_probes')).toBe(false);
 
+    const urlSelected = new URLSearchParams(historyQueryString('n', 'a', 'b', undefined, {
+      probe: {
+        id: 'health',
+        type: 'url',
+        url: 'https://service.example/health?full=1',
+        expectedStatus: 204,
+      },
+    }));
+    expect(urlSelected.get('probe_type')).toBe('url');
+    expect(urlSelected.get('probe_url')).toBe('https://service.example/health?full=1');
+    expect(urlSelected.get('probe_expected_status')).toBe('204');
+    expect(urlSelected.has('probe_host')).toBe(false);
+    expect(urlSelected.has('probe_port')).toBe(false);
+
     const resourceOnly = new URLSearchParams(historyQueryString('n', 'a', 'b', undefined, {
       includeProbes: false,
     }));
     expect(resourceOnly.get('include_probes')).toBe('false');
     expect(resourceOnly.has('probe_id')).toBe(false);
+  });
+
+  it('requests exactly one selected device or explicitly omits device history', () => {
+    const selected = new URLSearchParams(historyQueryString('n', 'a', 'b', undefined, {
+      device: { kind: 'gpu', deviceId: 'a'.repeat(64) },
+    }));
+    expect(selected.get('include_devices')).toBe('true');
+    expect(selected.get('device_kind')).toBe('gpu');
+    expect(selected.get('device_id')).toBe('a'.repeat(64));
+
+    const omitted = new URLSearchParams(historyQueryString('n', 'a', 'b'));
+    expect(omitted.get('include_devices')).toBe('false');
+    expect(omitted.has('device_kind')).toBe(false);
+    expect(omitted.has('device_id')).toBe(false);
   });
 });
 
@@ -174,6 +204,15 @@ describe('parseNodeHistory', () => {
         // malformed TCP descriptor (no port) → dropped.
         { series_id: 'bad', id: 'bad', type: 'tcp', host: 'bad.example', buckets: [] },
       ],
+      devices: [{
+        series_id: 'd'.repeat(64),
+        device_id: 'e'.repeat(64),
+        kind: 'filesystem',
+        buckets: [{
+          t: '2026-07-13T10:00:00Z',
+          metrics: { disk_filesystem_used_pct: { avg: 62.5, min: 60, max: 70 } },
+        }],
+      }],
     };
     const h = parseNodeHistory(wire);
     expect(h.step).toBe('5m0s');
@@ -203,6 +242,15 @@ describe('parseNodeHistory', () => {
         }],
       },
     ]);
+    expect(h.devices).toEqual([{
+      seriesId: 'd'.repeat(64),
+      deviceId: 'e'.repeat(64),
+      kind: 'filesystem',
+      buckets: [{
+        t: '2026-07-13T10:00:00Z',
+        metrics: { disk_filesystem_used_pct: { avg: 62.5, min: 60, max: 70 } },
+      }],
+    }]);
   });
 
   it('honors disabled:true with empty buckets (history off)', () => {
@@ -210,13 +258,82 @@ describe('parseNodeHistory', () => {
     expect(h.disabled).toBe(true);
     expect(h.buckets).toHaveLength(0);
     expect(h.probes).toHaveLength(0);
+    expect(h.devices).toHaveLength(0);
+  });
+
+  it('parses URL mismatch latency without admitting actual status into history', () => {
+    const history = parseNodeHistory({
+      probes: [{
+        series_id: 'c'.repeat(64),
+        id: 'health',
+        type: 'url',
+        url: 'https://service.example/health',
+        expected_status: 204,
+        actual_status: 500,
+        interval_ms: 30_000,
+        buckets: [{
+          t: '2026-07-17T10:00:00Z',
+          attempts: 1,
+          successes: 0,
+          failures: 1,
+          latency_ms: { avg: 17, min: 17, max: 17 },
+          failure_reasons: { unexpected_status: 1 },
+          actual_status: 500,
+        }],
+      }],
+    });
+
+    expect(history.probes).toEqual([{
+      seriesId: 'c'.repeat(64),
+      id: 'health',
+      type: 'url',
+      url: 'https://service.example/health',
+      expectedStatus: 204,
+      intervalMS: 30_000,
+      buckets: [{
+        t: '2026-07-17T10:00:00Z',
+        attempts: 1,
+        successes: 0,
+        failures: 1,
+        latencyMS: { avg: 17, min: 17, max: 17 },
+        failureReasons: { unexpected_status: 1 },
+      }],
+    }]);
+    expect(JSON.stringify(history)).not.toContain('actualStatus');
+    expect(JSON.stringify(history)).not.toContain('actual_status');
   });
 
   it('never throws on null/garbage input', () => {
-    const empty = { step: '', disabled: false, buckets: [], probes: [] };
+    const empty = { step: '', disabled: false, buckets: [], probes: [], devices: [] };
     expect(parseNodeHistory(null)).toEqual(empty);
     expect(parseNodeHistory({ buckets: 'not-an-array', probes: {} })).toEqual(empty);
     expect(parseNodeHistory(42)).toEqual(empty);
+  });
+
+  it('admits one bounded exact device series and rejects impossible broad or unknown data', () => {
+    const valid = (id: string, metric: Record<string, unknown>) => ({
+      series_id: id.repeat(64),
+      device_id: id.repeat(64),
+      kind: 'gpu',
+      buckets: [{ t: '2026-07-13T10:00:00Z', metrics: metric }],
+    });
+    const broad = parseNodeHistory({ devices: [
+      valid('a', { gpu_utilization_pct: { avg: 0, min: 0, max: 0 } }),
+      valid('b', { gpu_vram_used_pct: { avg: 50 } }),
+    ] });
+    expect(broad.devices).toHaveLength(0);
+
+    const parsed = parseNodeHistory({ devices: [
+      valid('a', { gpu_utilization_pct: { avg: 0, min: 0, max: 0 } }),
+    ] });
+    expect(parsed.devices[0].buckets[0].metrics.gpu_utilization_pct?.avg).toBe(0);
+
+    expect(parseNodeHistory({ devices: [
+      valid('c', { disk_io_busy_pct: { avg: 5 } }),
+    ] }).devices[0].buckets).toHaveLength(0);
+    expect(parseNodeHistory({ devices: [
+      valid('d', { future_gpu_metric: { avg: 5 } }),
+    ] }).devices[0].buckets).toHaveLength(0);
   });
 
   it('bounds accepted cardinality without letting malformed prefixes consume the budget', () => {
@@ -364,6 +481,28 @@ describe('metricSeries', () => {
   });
 });
 
+describe('deviceMetricSeries', () => {
+  it('preserves a legitimate zero and renders absent metrics or missing intervals as gaps', () => {
+    const step = 30_000;
+    const points = deviceMetricSeries([
+      {
+        t: '2026-07-13T10:00:00Z',
+        metrics: { gpu_utilization_pct: { avg: 0, min: 0, max: 0 } },
+      },
+      {
+        t: '2026-07-13T10:00:30Z',
+        metrics: { gpu_vram_used_pct: { avg: 50 } },
+      },
+      {
+        t: '2026-07-13T10:02:00Z',
+        metrics: { gpu_utilization_pct: { avg: 25 } },
+      },
+    ], step, 'gpu_utilization_pct');
+
+    expect(points.map((point) => point.avg)).toEqual([0, null, null, 25]);
+  });
+});
+
 describe('probe history series', () => {
   const stepMs = 5 * 60_000;
   const buckets: ProbeHistoryBucket[] = [
@@ -476,6 +615,25 @@ describe('probe history series', () => {
     )).toBe(false);
     expect(probeHistoryMatchesPolicy(
       { id: 'same-id', type: 'tcp', host: 'old.example', port: 8443 },
+      series,
+    )).toBe(false);
+  });
+
+  it('matches URL history by exact URL and effective expected status', () => {
+    const series = parseNodeHistory({ probes: [{
+      series_id: 'd'.repeat(64),
+      id: 'health',
+      type: 'url',
+      url: 'https://service.example/health',
+      expected_status: 200,
+      buckets: [],
+    }] }).probes[0];
+    expect(probeHistoryMatchesPolicy(
+      { id: 'health', type: 'url', url: 'https://service.example/health' },
+      series,
+    )).toBe(true);
+    expect(probeHistoryMatchesPolicy(
+      { id: 'health', type: 'url', url: 'https://service.example/health', expected_status: 204 },
       series,
     )).toBe(false);
   });

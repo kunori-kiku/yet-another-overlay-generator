@@ -9,8 +9,11 @@ package api
 
 import (
 	"errors"
+	"strconv"
+	"strings"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 )
 
@@ -25,6 +28,7 @@ import (
 //   - ErrNodeRevoked       → enroll_node_revoked (409)
 //   - ErrInvalidWGKey      → req_field_invalid {field:wg_public_key} (400)
 //   - ErrDuplicateWGKey    → duplicate_wg_key (409)
+//   - ErrTopologyChanged   → topology_changed (409)
 //
 // The cause is wrapped for errors.Is/As + logs; it never reaches the wire (apierr.Error
 // serializes only code+message+params — see internal/apierr), so wrapping is response-
@@ -52,11 +56,45 @@ func mapControllerErr(err error) *apierr.Error {
 		return apierr.New(apierr.CodeReqFieldInvalid).With("field", "wg_public_key").Wrap(err)
 	case errors.Is(err, controller.ErrDuplicateWGKey):
 		return apierr.New(apierr.CodeDuplicateWGKey).Wrap(err)
+	case errors.Is(err, controller.ErrTopologyChanged):
+		return apierr.New(apierr.CodeTopologyChanged).Wrap(err)
 	case errors.Is(err, controller.ErrTelemetryProbesRequireKeystone):
 		return apierr.New(apierr.CodeTelemetryProbesRequireKeystone).Wrap(err)
 	default:
+		var readiness *controller.TelemetryPolicyReadinessError
+		if !errors.As(err, &readiness) {
+			return nil
+		}
+		bounded := readiness.NodeIDs
+		if len(bounded) > 16 {
+			bounded = bounded[:16]
+		}
+		return apierr.New(apierr.CodeTelemetryPolicyUpgradeRequired).
+			With("count", strconv.Itoa(len(readiness.NodeIDs))).
+			With("nodes", strings.Join(bounded, ", ")).
+			Wrap(err)
+	}
+}
+
+// mapTopologyValidationErr converts the compiler's structured schema/semantic failure into one
+// stable HTTP 422 envelope. Validator codes deliberately remain distinct from apierr codes, so the
+// first finding is carried as params for edge localization instead of being promoted into an HTTP
+// code. Unknown compile, render, export, and storage failures return nil and retain the handler's
+// operational 500 fallback.
+func mapTopologyValidationErr(err error) *apierr.Error {
+	var validationErr *compiler.TopologyValidationError
+	if !errors.As(err, &validationErr) || len(validationErr.Findings) == 0 {
 		return nil
 	}
+	finding := validationErr.Findings[0]
+	mapped := apierr.New(apierr.CodeTopologyValidationFailed).
+		With("field", finding.Field).
+		With("validation_code", finding.Code).
+		With("validation_message", finding.Message)
+	for key, value := range finding.Params {
+		mapped.With("validation_param_"+key, value)
+	}
+	return mapped.Wrap(err)
 }
 
 // codedErr is the return-value twin of writeCodedOr (handler.go): it surfaces err as its own

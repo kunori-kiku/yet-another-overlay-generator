@@ -13,9 +13,15 @@ import { ResourcePanel } from '../deploy/ResourcePanel';
 import { ControllerErrorBanner } from '../deploy/ControllerErrorBanner';
 import { TelemetryProbeEditor } from '../deploy/TelemetryProbeEditor';
 import { TelemetryProbeResults } from '../deploy/TelemetryProbeResults';
+import { TelemetryDevicePanel } from '../deploy/TelemetryDevicePanel';
 import { SaveConflictDialog } from '../design/SaveConflictDialog';
-import { sameTelemetryPolicy } from '../../lib/probeResults';
+import {
+  probeDestinationInvalid,
+  probeExpectedStatusInvalid,
+  sameTelemetryPolicy,
+} from '../../lib/probeResults';
 import { FleetRefreshControls } from '../deploy/FleetRefreshControls';
+import { requiredTelemetryCapabilities } from '../../lib/deployPreview';
 
 // NodeResourceHistory is lazy-loaded so its recharts dependency (~105 kB gzip) is code-split into its
 // own chunk and never bloats the initial bundle — it loads only when a node-detail page is viewed.
@@ -51,6 +57,7 @@ export function FleetNodeDetailPage() {
   const nameByNodeId = nodeNameMap(topologyNodes);
   const topologyNode = topologyNodes.find((candidate) => candidate.id === id);
   const configuredProbes = topologyNode?.telemetry_probes ?? [];
+  const configuredDevices = topologyNode?.telemetry_devices;
   const updateNode = useTopologyStore((s) => s.updateNode);
   const node = useControllerStore((s) => s.nodes.find((n) => n.nodeId === id));
   const settings = useControllerStore((s) => s.settings);
@@ -60,7 +67,24 @@ export function FleetNodeDetailPage() {
   const saving = useControllerStore((s) => s.saving);
   const serverOperatorPinned = useControllerStore((s) => s.serverOperatorPinned);
   const syncedProbes = lastSyncedTopology?.nodes.find((candidate) => candidate.id === id)?.telemetry_probes ?? [];
-  const telemetryDirty = topologyNode !== undefined && !sameTelemetryPolicy(configuredProbes, syncedProbes);
+  const syncedDevices = lastSyncedTopology?.nodes.find((candidate) => candidate.id === id)?.telemetry_devices;
+  const telemetryDirty = topologyNode !== undefined && (
+    !sameTelemetryPolicy(configuredProbes, syncedProbes)
+    || configuredDevices?.mode !== syncedDevices?.mode
+  );
+  const telemetryIncomplete = configuredProbes.some((probe) =>
+    probeDestinationInvalid(probe) || probeExpectedStatusInvalid(probe));
+  const successorCapabilities = topologyNode === undefined
+    ? []
+    : requiredTelemetryCapabilities(topologyNode);
+  const successorPolicyRequired = successorCapabilities.length > 0;
+  const telemetryPolicyReadiness = !successorPolicyRequired
+    ? null
+    : node?.agentCapabilities === undefined
+      ? 'not-confirmed'
+      : successorCapabilities.every((capability) => node.agentCapabilities?.includes(capability))
+        ? 'ready'
+        : 'upgrade-required';
   // Force redeploy this node (plan-6): re-stage it even if unchanged, then the usual promote path
   // (reuses controllerStore.deploy with force_nodes). Disabled without auth (a mutating action).
   const forceRedeployNode = useControllerStore((s) => s.forceRedeployNode);
@@ -132,6 +156,26 @@ export function FleetNodeDetailPage() {
               {(node.conditions?.length ?? 0) > 0 ? <NodeConditions conditions={node.conditions} language={language} /> : '—'}
             </Field>
             <Field label={t(language, 'fleetNodeDetailPage.agentVersion')}>{node.agentVersion || '—'}</Field>
+            {telemetryPolicyReadiness && (
+              <Field label={t(language, 'fleetNodeDetailPage.telemetryPolicyReadiness')}>
+                <span
+                  data-testid="telemetry-policy-readiness"
+                  className={
+                    telemetryPolicyReadiness === 'ready'
+                      ? 'text-[var(--success)]'
+                      : telemetryPolicyReadiness === 'upgrade-required'
+                        ? 'text-[var(--warning)]'
+                        : 'text-[var(--content-muted)]'
+                  }
+                >
+                  {telemetryPolicyReadiness === 'ready'
+                    ? t(language, 'fleetNodeDetailPage.telemetryPolicyReady')
+                    : telemetryPolicyReadiness === 'upgrade-required'
+                      ? t(language, 'fleetNodeDetailPage.telemetryPolicyUpgradeRequired')
+                      : t(language, 'fleetNodeDetailPage.telemetryPolicyNotConfirmed')}
+                </span>
+              </Field>
+            )}
             <Field label={t(language, 'updateStatus.label')}>
               <UpdateStatusChip node={node} settings={settings} language={language} />
             </Field>
@@ -154,6 +198,15 @@ export function FleetNodeDetailPage() {
                   language={language}
                   updateNode={updateNode}
                 />
+                <TelemetryDevicePanel
+                  node={topologyNode}
+                  inventory={node.deviceInventory}
+                  samples={node.deviceSamples}
+                  agentCapabilities={node.agentCapabilities}
+                  keystonePinned={serverOperatorPinned}
+                  language={language}
+                  updateNode={updateNode}
+                />
                 <div className="flex flex-col gap-1">
                   <button
                     type="button"
@@ -169,8 +222,10 @@ export function FleetNodeDetailPage() {
                         ? t(language, 'telemetryProbes.save')
                         : t(language, 'telemetryProbes.saved')}
                   </button>
-                  <p className="text-xs text-[var(--content-muted)]">
-                    {t(language, 'telemetryProbes.saveHint')}
+                  <p className={`text-xs ${telemetryIncomplete ? 'text-[var(--danger)]' : 'text-[var(--content-muted)]'}`}>
+                    {telemetryIncomplete
+                      ? t(language, 'telemetryProbes.saveHintIncomplete')
+                      : t(language, 'telemetryProbes.saveHint')}
                   </p>
                 </div>
               </>
@@ -248,7 +303,7 @@ export function FleetNodeDetailPage() {
               would crash on a reload after upgrade. The panel itself renders nothing for an empty list. */}
           <WireGuardPeersPanel peers={node.wireguardPeers ?? []} language={language} />
           <ResourcePanel resource={node.resource} language={language} />
-          {/* Resource + active-probe history. Live-only in the browser: the fetched response is never
+          {/* Resource + active-probe + exact-device history. Live-only in the browser: the fetched response is never
               persisted, so it fetches on view, range/Resolution change, and when this node's last_seen
               advances after a manual/Live fleet refresh. Keyed on node id so navigation resets local
               chart state. */}
@@ -258,6 +313,8 @@ export function FleetNodeDetailPage() {
             <NodeResourceHistory
               key={node.nodeId}
               nodeId={node.nodeId}
+              deviceInventory={node.deviceInventory}
+              deviceTelemetryEnabled={configuredDevices?.mode === 'all-eligible-v1'}
               refreshAt={node.lastSeen}
             />
           </Suspense>

@@ -100,14 +100,14 @@ func TestActiveProbeSampler_NonBlockingResultAndNoOverlap(t *testing.T) {
 	started := make(chan struct{}, 2)
 	release := make(chan struct{})
 	var calls atomic.Int32
-	sampler.attempt = func(ctx context.Context, _ model.TelemetryProbe) string {
+	sampler.attempt = func(ctx context.Context, _ model.TelemetryProbe) probeAttemptOutcome {
 		calls.Add(1)
 		started <- struct{}{}
 		select {
 		case <-release:
-			return ""
+			return probeAttemptOutcome{}
 		case <-ctx.Done():
-			return "timeout"
+			return probeAttemptOutcome{FailureReason: probeFailureTimeout}
 		}
 	}
 
@@ -181,11 +181,11 @@ func TestActiveProbeSampler_CarriesMultipleCompletedAttemptsBetweenHeartbeats(t 
 		return ctx.Err() == nil
 	}
 	var attempts atomic.Int32
-	sampler.attempt = func(context.Context, model.TelemetryProbe) string {
+	sampler.attempt = func(context.Context, model.TelemetryProbe) probeAttemptOutcome {
 		if attempts.Add(1) == 2 {
-			return probeFailureTimeout
+			return probeAttemptOutcome{FailureReason: probeFailureTimeout}
 		}
-		return ""
+		return probeAttemptOutcome{}
 	}
 	sampler.checkedAtNow = func() time.Time {
 		return base.Add(time.Duration(attempts.Load()) * time.Second)
@@ -293,11 +293,11 @@ func TestActiveProbeSampler_AttemptPanicBecomesNetworkErrorAndCadenceSurvives(t 
 		return ctx.Err() == nil
 	}
 	var attempts atomic.Int32
-	sampler.attempt = func(context.Context, model.TelemetryProbe) string {
+	sampler.attempt = func(context.Context, model.TelemetryProbe) probeAttemptOutcome {
 		if attempts.Add(1) == 1 {
 			panic("probe implementation panic")
 		}
-		return ""
+		return probeAttemptOutcome{}
 	}
 
 	// The probe loop runs outside Telemetry.sampleGuarded, so it must contain its own panic boundary.
@@ -446,6 +446,78 @@ func TestActiveProbeSampler_MaxWindowFitsTelemetryAdmission(t *testing.T) {
 	}
 }
 
+func TestActiveProbeSampler_MaxEncodedURLPolicyFitsTelemetryAdmission(t *testing.T) {
+	sampler := newActiveProbeSampler(t.TempDir())
+	checkedAt := time.Date(2026, time.July, 16, 10, 20, 30, 123456789, time.UTC).Format(time.RFC3339Nano)
+	probes := make([]model.TelemetryProbe, 0, probepolicy.MaxProbes)
+	sampler.mu.Lock()
+	for i := 0; i < probepolicy.MaxProbes; i++ {
+		id := strings.Repeat("u", 60) + fmt.Sprintf("%03d", i)
+		probe := model.TelemetryProbe{
+			ID: id, Type: model.TelemetryProbeURL,
+			URL: "https://e/?" + strings.Repeat("&", 339), ExpectedStatus: 599,
+		}
+		probes = append(probes, probe)
+		latency := 4999.9
+		result := activeProbeResult{
+			ID: id, Type: probe.Type, URL: probe.URL,
+			ExpectedStatus: probe.ExpectedStatus, ActualStatus: 100,
+			Status: probeStatusFailure, LatencyMS: &latency, CheckedAt: checkedAt,
+			FailureReason: probeFailureUnexpectedStatus,
+		}
+		sampler.order = append(sampler.order, id)
+		sampler.probes[id] = &probeRuntime{probe: probe, result: result}
+	}
+	if err := probepolicy.Validate(probes); err != nil {
+		sampler.mu.Unlock()
+		t.Fatalf("max encoded URL fixture is not a valid signed policy: %v", err)
+	}
+	for i := 0; i < probemetric.MaxRecentSamples; i++ {
+		id := sampler.order[i%len(sampler.order)]
+		result := sampler.probes[id].result
+		result.IntervalMS = int64(probepolicy.MaxIntervalSeconds) * 1000
+		sampler.appendCompletedSampleLocked(result)
+	}
+	metrics := sampler.snapshotLocked()
+	sampler.mu.Unlock()
+	cpuPct := 100.0
+	metrics[resourceMetricKey] = hostResource{
+		CpuPct: &cpuPct, Load1: 9999, Load5: 9999, Load15: 9999,
+		MemTotalKB: 1 << 62, MemAvailKB: 1,
+	}
+
+	// The complete recent-attempt window is intentionally larger than the envelope. Admission must
+	// trim only that replay aid, keep every mandatory latest row, and still queue the heartbeat.
+	initialRaw, err := json.Marshal(metrics)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(initialRaw) <= telemetryprotocol.MaxMetricsBytes {
+		t.Fatalf("URL admission fixture is only %d bytes; want over %d", len(initialRaw), telemetryprotocol.MaxMetricsBytes)
+	}
+	sequencer := &telemetrySequencer{bootID: "00112233445566778899aabbccddeeff"}
+	snapshot, err := sequencer.snapshot(nil, metrics, time.Now(), 30*time.Second)
+	if err != nil {
+		t.Fatalf("maximum valid URL policy stopped heartbeat admission: %v", err)
+	}
+	admittedRaw, err := json.Marshal(snapshot.Metrics)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(admittedRaw) > telemetryprotocol.MaxMetricsBytes {
+		t.Fatalf("admitted URL metrics = %d bytes, limit %d", len(admittedRaw), telemetryprotocol.MaxMetricsBytes)
+	}
+	latest := decodeProbeMetricForAdmissionTest(t, snapshot.Metrics[probeResultsMetricKey])
+	if len(latest) != probepolicy.MaxProbes {
+		t.Fatalf("admission retained %d latest URL rows, want %d", len(latest), probepolicy.MaxProbes)
+	}
+	for i, result := range latest {
+		if result.ID != probes[i].ID || result.URL != probes[i].URL {
+			t.Fatalf("latest URL row %d changed during admission: %+v", i, result)
+		}
+	}
+}
+
 func TestActiveProbeSampler_MonotonicScheduleIgnoresHeartbeatWallClock(t *testing.T) {
 	dir := t.TempDir()
 	probe := model.TelemetryProbe{
@@ -477,9 +549,9 @@ func TestActiveProbeSampler_MonotonicScheduleIgnoresHeartbeatWallClock(t *testin
 		}
 	}
 	var calls atomic.Int32
-	sampler.attempt = func(context.Context, model.TelemetryProbe) string {
+	sampler.attempt = func(context.Context, model.TelemetryProbe) probeAttemptOutcome {
 		calls.Add(1)
-		return ""
+		return probeAttemptOutcome{}
 	}
 
 	sampler.Sample(time.Date(2099, time.January, 1, 0, 0, 0, 0, time.UTC))
@@ -530,9 +602,9 @@ func TestActiveProbeSampler_MonotonicLatencyUsesWallOnlyForCheckedAt(t *testing.
 	// Simulate wall time stepping backward while monotonic elapsed time still advances.
 	checkedAt := time.Date(1999, time.December, 31, 23, 59, 59, 0, time.FixedZone("test", 9*60*60))
 	sampler.checkedAtNow = func() time.Time { return checkedAt }
-	sampler.attempt = func(context.Context, model.TelemetryProbe) string {
+	sampler.attempt = func(context.Context, model.TelemetryProbe) probeAttemptOutcome {
 		elapsedNanos.Add(int64(125 * time.Millisecond))
-		return ""
+		return probeAttemptOutcome{}
 	}
 
 	sampler.Sample(time.Date(2099, time.January, 1, 0, 0, 0, 0, time.UTC))
@@ -561,7 +633,7 @@ func TestActiveProbeSampler_BoundsConcurrencyAndCancelsOnSignedOmission(t *testi
 	release := make(chan struct{})
 	done := make(chan struct{}, len(probes))
 	var current, maximum atomic.Int32
-	sampler.attempt = func(ctx context.Context, _ model.TelemetryProbe) string {
+	sampler.attempt = func(ctx context.Context, _ model.TelemetryProbe) probeAttemptOutcome {
 		n := current.Add(1)
 		for {
 			old := maximum.Load()
@@ -575,7 +647,7 @@ func TestActiveProbeSampler_BoundsConcurrencyAndCancelsOnSignedOmission(t *testi
 		}
 		current.Add(-1)
 		done <- struct{}{}
-		return ""
+		return probeAttemptOutcome{}
 	}
 	sampler.Sample(time.Now().UTC())
 	deadline := time.Now().Add(time.Second)
@@ -602,11 +674,11 @@ func TestActiveProbeSampler_BoundsConcurrencyAndCancelsOnSignedOmission(t *testi
 	saveActiveProbePolicy(t, dir, []model.TelemetryProbe{cancelProbe})
 	startedCancel := make(chan struct{})
 	canceled := make(chan struct{})
-	sampler.attempt = func(ctx context.Context, _ model.TelemetryProbe) string {
+	sampler.attempt = func(ctx context.Context, _ model.TelemetryProbe) probeAttemptOutcome {
 		close(startedCancel)
 		<-ctx.Done()
 		close(canceled)
-		return "timeout"
+		return probeAttemptOutcome{FailureReason: probeFailureTimeout}
 	}
 	sampler.Sample(time.Now().UTC())
 	select {
@@ -645,10 +717,10 @@ func TestPerformProbeAttempt_TCPResolvesDNSWithoutExtraDependency(t *testing.T) 
 	port := listener.Addr().(*net.TCPAddr).Port
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if reason := performProbeAttempt(ctx, model.TelemetryProbe{
+	if outcome := performProbeAttempt(ctx, model.TelemetryProbe{
 		ID: "local", Type: model.TelemetryProbeTCP, Host: "localhost", Port: port,
-	}); reason != "" {
-		t.Fatalf("TCP DNS probe failed: %s", reason)
+	}); outcome.FailureReason != "" {
+		t.Fatalf("TCP DNS probe failed: %s", outcome.FailureReason)
 	}
 	select {
 	case <-accepted:

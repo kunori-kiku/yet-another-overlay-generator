@@ -31,9 +31,10 @@ in [../compiler/allocation-stability.md](../compiler/allocation-stability.md).
 - The version MUST be bumped only when the meaning or format of the `pinned_*` fields changes, so
   that older topologies can be branched on or migrated.
 
-> **Compliance:** the Topology struct currently has no `alloc_schema_version` field
-> (`internal/model/topology.go`); allocation is positional and unversioned. Added with the
-> sticky-pin allocation work (see [../compiler/allocation-stability.md](../compiler/allocation-stability.md)).
+> **Compliance:** `model.Topology.AllocSchemaVersion` is present and
+> `model.CurrentAllocSchemaVersion` is `1`. The validator rejects a higher input version, while the
+> compiler stamps version 1 on write-back without requiring a bump for the endpoint-specific client
+> compatibility correction.
 
 ## Project
 

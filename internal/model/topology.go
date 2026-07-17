@@ -127,21 +127,35 @@ type Node struct {
 
 	// TelemetryProbes are operator-authorized active reachability checks run by this managed
 	// node after the containing deployment bundle has passed the off-host keystone gate and
-	// applied successfully. Host is an explicit IP literal or DNS hostname; it is intentionally
-	// independent of topology membership so operators can monitor external dependencies. The
-	// type discriminator is the extension boundary for future probe kinds (for example URL),
-	// whose additional fields must be introduced and validated explicitly rather than smuggled
-	// through Host.
+	// applied successfully. ICMP/TCP Host is an explicit IP literal or DNS hostname, while URL
+	// probes use their separately validated URL field. Destinations are intentionally independent
+	// of topology membership so operators can monitor external or internal dependencies without
+	// overloading one probe type's fields into another request shape.
 	TelemetryProbes []TelemetryProbe `json:"telemetry_probes,omitempty"`
+
+	// TelemetryDevices requests automatic discovery of eligible local devices. It is a separately
+	// versioned successor-policy feature rather than an extension to strict telemetry.json v1.
+	TelemetryDevices *TelemetryDevicePolicy `json:"telemetry_devices,omitempty"`
 }
 
-// TelemetryProbe is one manually configured active check. Zero interval/timeout values select
-// the documented policy defaults. TCP accepts exactly one port; ICMP accepts none.
+// TelemetryDevicePolicy selects one bounded automatic device-discovery contract. The policy shape
+// stays deliberately small: the signed opt-in activates the registered collectors and charted metrics.
+type TelemetryDevicePolicy struct {
+	Mode string `json:"mode"`
+}
+
+// TelemetryProbe is one manually configured active check. Name is optional controller/Fleet
+// presentation metadata and is projected out of executable policy. Host/Port identify ICMP/TCP
+// destinations; URL/ExpectedStatus identify the separately versioned URL destination contract.
+// Zero interval/timeout/status values select the documented policy defaults.
 type TelemetryProbe struct {
 	ID                  string `json:"id"`
+	Name                string `json:"name,omitempty"`
 	Type                string `json:"type"`
-	Host                string `json:"host"`
+	Host                string `json:"host,omitempty"`
 	Port                int    `json:"port,omitempty"`
+	URL                 string `json:"url,omitempty"`
+	ExpectedStatus      int    `json:"expected_status,omitempty"`
 	IntervalSeconds     int    `json:"interval_seconds,omitempty"`
 	TimeoutMilliseconds int    `json:"timeout_milliseconds,omitempty"`
 }
@@ -149,6 +163,7 @@ type TelemetryProbe struct {
 const (
 	TelemetryProbeICMP = "icmp"
 	TelemetryProbeTCP  = "tcp"
+	TelemetryProbeURL  = "url"
 )
 
 // Value constants for Node.DeploymentMode. An empty value is equivalent to DeploymentManaged.
@@ -276,10 +291,14 @@ type Edge struct {
 	//
 	// Pins are oriented by the owning edge's FromNodeID/ToNodeID: from_* is the value on this edge's from side,
 	// to_* is the value on the to side; the reverse edge for the same pair of nodes carries the same pair of values, mirrored.
-	// Each resource is either fully pinned as a pair or not pinned at all; a single-ended (partial) pin is rejected by the validator.
+	// Transit and link-local resources are either fully pinned as a pair or not pinned at all. Listen ports are paired on
+	// ordinary links; a client link is the endpoint-specific exception because the client uses one shared wg0, so its port
+	// stays zero while the non-client endpoint retains one valid sticky listen-port pin. CompiledPort remains only the
+	// effective dial-port echo (including an explicit endpoint_port override), not the sticky allocation authority.
 	// See docs/spec/compiler/allocation-stability.md and docs/spec/data-model/edge.md (Allocation pins).
 
-	// Listen-port pins for the from / to side interfaces (the client role does not use per-peer ports, so it is not pinned).
+	// Listen-port pins for the from / to side interfaces. Only a client endpoint lacks a per-link port;
+	// the opposite non-client endpoint still owns and persists its real per-link listen port.
 	PinnedFromPort int `json:"pinned_from_port,omitempty"`
 	PinnedToPort   int `json:"pinned_to_port,omitempty"`
 

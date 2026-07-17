@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/devicemetric"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrymetric"
 )
 
@@ -32,9 +33,10 @@ import (
 //     conflict, and a list entry the model does NOT mark omitempty would wrongly drop a required
 //     field. Exact equality catches both directions.
 //
-//  2. The two frontend pin lists — PIN_FIELDS (lib/normalizeEdges.ts) and ALLOCATION_PIN_FIELDS
-//     (stores/topologyStore.ts) — are each a SUBSET of model.Edge's json tags. A Go rename of any
-//     pinned field (e.g. pinned_from_port) orphans the FE literal, which the subset check reds.
+//  2. The frontend persisted-pin list — PERSISTED_ALLOCATION_PIN_FIELDS
+//     (lib/allocationFields.ts) — is a SUBSET of model.Edge's json tags. A Go rename of any pinned
+//     field (e.g. pinned_from_port) orphans the FE literal, which the subset check reds. The
+//     seven-field server list uses a TypeScript spread and is checked by the frontend unit suite.
 //
 //  3. The controller wire DTOs, hand-duplicated across the agent client (`...Wire`,
 //     internal/agent/controller_client.go — "they must match the server's JSON exactly") and the
@@ -66,11 +68,16 @@ import (
 //     projection/API encoding; the frontend literal drives exhaustive parser and renderer registries.
 //     Exact equality makes a new chart family fail CI until the panel can both parse and render it.
 //
+//  6. The automatic-device numeric catalog. The Go leaf contract and frontend leaf literal must have
+//     the same exact key/kind/unit triples, so a metric cannot be collected or accepted live while
+//     silently lacking the correct chart semantics.
+//
 // FAIL-CLOSED (invariant [5]): this gate only EXTENDS the guarantee. There is deliberately no
 // allowlist / escape hatch — a legitimately new omitempty field or wire field MUST be reflected in
 // the mirror (the RED BUILD forces that edit), because a weakened gate is worse than none. The gate
-// reads wire authorities as SOURCE (go/ast + regexp). The chart-family gate imports only the leaf
-// telemetrymetric catalog so it compares the executable family list rather than a second Go manifest.
+// reads wire authorities as SOURCE (go/ast + regexp). The chart gates import only the leaf
+// telemetrymetric/devicemetric catalogs so they compare executable definitions rather than a second
+// Go manifest.
 //
 // Non-vacuity: authored against the live tree, this gate first reddened on the pre-existing
 // EDGE_OMITEMPTY mimic_fallback gap (model.Edge tags mimic_fallback omitempty; the list omitted it);
@@ -81,15 +88,15 @@ import (
 
 // Source paths, relative to this package directory (internal/wiredrift/).
 const (
-	modelSrc          = "../model/topology.go"
-	agentWireSrc      = "../agent/controller_client.go"
-	apiWireSrc        = "../api/wire_controller.go"
-	probeMetricSrc    = "../probemetric/result.go"
-	feNormalizeEdges  = "../../frontend/src/lib/normalizeEdges.ts"
-	feTopologyStore   = "../../frontend/src/stores/topologyStore.ts"
-	feControllerHelps = "../../frontend/src/stores/controller/helpers.ts"
-	feProbeResults    = "../../frontend/src/lib/probeResults.ts"
-	feTelemetryHist   = "../../frontend/src/lib/telemetryHistory.ts"
+	modelSrc           = "../model/topology.go"
+	agentWireSrc       = "../agent/controller_client.go"
+	apiWireSrc         = "../api/wire_controller.go"
+	probeMetricSrc     = "../probemetric/result.go"
+	feAllocationFields = "../../frontend/src/lib/allocationFields.ts"
+	feControllerHelps  = "../../frontend/src/stores/controller/helpers.ts"
+	feProbeResults     = "../../frontend/src/lib/probeResults.ts"
+	feTelemetryHist    = "../../frontend/src/lib/telemetryHistory.ts"
+	feDeviceTelemetry  = "../../frontend/src/types/deviceTelemetry.ts"
 )
 
 // jsonField is one struct field's on-the-wire identity: its json name, whether it carries
@@ -229,6 +236,36 @@ func feArrayElements(t *testing.T, path, name string) []string {
 	return elems
 }
 
+func feDeviceNumericDefinitions(t *testing.T) []string {
+	t.Helper()
+	raw, err := os.ReadFile(feDeviceTelemetry)
+	if err != nil {
+		t.Fatalf("read %s: %v", feDeviceTelemetry, err)
+	}
+	src := string(raw)
+	declRE := regexp.MustCompile(`(?:export\s+)?const\s+DEVICE_NUMERIC_DEFINITIONS\s*=\s*\[`)
+	loc := declRE.FindStringIndex(src)
+	if loc == nil {
+		t.Fatalf("%s: DEVICE_NUMERIC_DEFINITIONS array not found", feDeviceTelemetry)
+	}
+	rest := src[loc[1]:]
+	end := strings.IndexByte(rest, ']')
+	if end < 0 {
+		t.Fatalf("%s: DEVICE_NUMERIC_DEFINITIONS has no closing bracket", feDeviceTelemetry)
+	}
+	entryRE := regexp.MustCompile(`\{\s*key:\s*'([^']+)'\s*,\s*kind:\s*'([^']+)'\s*,\s*unit:\s*'([^']+)'\s*\}`)
+	matches := entryRE.FindAllStringSubmatch(rest[:end], -1)
+	if len(matches) == 0 {
+		t.Fatalf("%s: DEVICE_NUMERIC_DEFINITIONS has no parseable entries", feDeviceTelemetry)
+	}
+	out := make([]string, 0, len(matches))
+	for _, match := range matches {
+		out = append(out, match[1]+"|"+match[2]+"|"+match[3])
+	}
+	sort.Strings(out)
+	return out
+}
+
 // diffSets returns the elements missing from got and the extras present in got but not want.
 func diffSets(want, got []string) (missing, extra []string) {
 	w := map[string]bool{}
@@ -291,30 +328,20 @@ func TestFEOmitemptyListsMatchModel(t *testing.T) {
 	}
 }
 
-// TestFEPinListsAreEdgeFields asserts every element of the FE pin lists is a real model.Edge json
-// tag (subset). A Go rename of a pinned field orphans the FE literal and reds here.
+// TestFEPinListsAreEdgeFields asserts every persisted frontend pin is a real model.Edge json tag.
+// A Go rename of a pinned field orphans the FE literal and reds here.
 func TestFEPinListsAreEdgeFields(t *testing.T) {
 	edge, ok := structsOf(t, modelSrc)["Edge"]
 	if !ok {
 		t.Fatalf("model struct Edge not found in %s", modelSrc)
 	}
 	edgeNames := allNames(edge)
-	cases := []struct {
-		list string
-		path string
-	}{
-		{"PIN_FIELDS", feNormalizeEdges},
-		{"ALLOCATION_PIN_FIELDS", feTopologyStore},
-	}
-	for _, c := range cases {
-		t.Run(c.list, func(t *testing.T) {
-			for _, f := range feArrayElements(t, c.path, c.list) {
-				if !edgeNames[f] {
-					t.Errorf("%s contains %q, which is NOT a model.Edge json tag — a Go rename orphaned it.\n"+
-						"  Reconcile %s (%s) with model.Edge's json tags.", c.list, f, c.list, c.path)
-				}
-			}
-		})
+	const list = "PERSISTED_ALLOCATION_PIN_FIELDS"
+	for _, f := range feArrayElements(t, feAllocationFields, list) {
+		if !edgeNames[f] {
+			t.Errorf("%s contains %q, which is NOT a model.Edge json tag — a Go rename orphaned it.\n"+
+				"  Reconcile %s (%s) with model.Edge's json tags.", list, f, list, feAllocationFields)
+		}
 	}
 }
 
@@ -394,6 +421,24 @@ func TestTelemetryHistoryChartFamiliesMirrorFrontend(t *testing.T) {
 		t.Errorf("telemetry history chart families drifted between Go and the frontend.\n"+
 			"  Go families missing from parser/render registries: %v\n"+
 			"  frontend families missing from the Go catalog: %v", missing, extra)
+	}
+}
+
+// TestDeviceNumericDefinitionsMirrorFrontend pins the full key/kind/unit contract, not only the
+// top-level device chart family. The frontend literal is shared by live parsing, exact-history
+// parsing, and rendering, so any missing, extra, wrong-kind, or wrong-unit definition blocks release.
+func TestDeviceNumericDefinitionsMirrorFrontend(t *testing.T) {
+	want := make([]string, 0, len(devicemetric.NumericDefinitions()))
+	for _, definition := range devicemetric.NumericDefinitions() {
+		want = append(want, string(definition.Key)+"|"+string(definition.Kind)+"|"+definition.Unit)
+	}
+	sort.Strings(want)
+	got := feDeviceNumericDefinitions(t)
+	missing, extra := diffSets(want, got)
+	if len(missing) > 0 || len(extra) > 0 {
+		t.Errorf("device numeric definitions drifted between Go and the frontend.\n"+
+			"  Go definitions missing from the frontend authority: %v\n"+
+			"  frontend definitions missing from Go: %v", missing, extra)
 	}
 }
 

@@ -3,14 +3,54 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
+
+type interleavedTopologySaveStore struct {
+	Store
+	replacement []byte
+	once        sync.Once
+	hookErr     error
+}
+
+func (s *interleavedTopologySaveStore) CompareAndSetTopology(ctx context.Context, tenant TenantID, expectedVersion int64, raw []byte) (TopologyRecord, error) {
+	s.once.Do(func() {
+		_, s.hookErr = s.Store.PutTopology(ctx, tenant, s.replacement)
+	})
+	if s.hookErr != nil {
+		return TopologyRecord{}, s.hookErr
+	}
+	return s.Store.CompareAndSetTopology(ctx, tenant, expectedVersion, raw)
+}
+
+type blockingStagedSetStore struct {
+	Store
+	replaceEntered chan struct{}
+	replaceRelease chan struct{}
+	putCalled      chan struct{}
+}
+
+func (s *blockingStagedSetStore) ReplaceStagedSet(ctx context.Context, tenant TenantID, set StagedSet) ([]string, error) {
+	close(s.replaceEntered)
+	<-s.replaceRelease
+	return s.Store.ReplaceStagedSet(ctx, tenant, set)
+}
+
+func (s *blockingStagedSetStore) PutTopology(ctx context.Context, tenant TenantID, raw []byte) (TopologyRecord, error) {
+	select {
+	case s.putCalled <- struct{}{}:
+	default:
+	}
+	return s.Store.PutTopology(ctx, tenant, raw)
+}
 
 // genWGPubKey returns a fresh, real WireGuard public key (base64). The controller
 // only ever holds public keys (zero-knowledge custody), so the test mirrors that:
@@ -28,7 +68,7 @@ func genWGPubKey(t *testing.T) string {
 // stageTestTopo is a small topology: one router (public), one peer that dials the
 // router, and one client that also dials the router. Edges are peer->router and
 // client->router (both single outbound, matching the client-edge rule). This is the
-// shape the compile-and-stage flow projects down to its enrolled subgraph.
+// shape the compile-and-stage flow projects down to its deployment-ready subgraph.
 func stageTestTopo() *model.Topology {
 	return &model.Topology{
 		Project: model.Project{ID: "ctrl-stage-001", Name: "Stage Test"},
@@ -72,6 +112,94 @@ func putStageTopo(t *testing.T, store Store, tnt TenantID) context.Context {
 		t.Fatalf("PutTopology: %v", err)
 	}
 	return ctx
+}
+
+func TestCompileAndStage_ConcurrentTopologySaveWins(t *testing.T) {
+	base := NewMemStore()
+	tenant := TenantID("stage-concurrent-save")
+	ctx := putStageTopo(t, base, tenant)
+	approveNode(t, ctx, base, tenant, "node-router", genWGPubKey(t))
+	approveNode(t, ctx, base, tenant, "node-peer", genWGPubKey(t))
+
+	concurrent := stageTestTopo()
+	concurrent.Project.Name = "Saved from another Fleet tab"
+	replacement, err := json.Marshal(concurrent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &interleavedTopologySaveStore{Store: base, replacement: replacement}
+	if _, err := CompileAndStage(ctx, store, tenant, time.Now().UTC()); !errors.Is(err, ErrTopologyChanged) {
+		t.Fatalf("CompileAndStage error = %v, want ErrTopologyChanged", err)
+	}
+
+	current, err := base.GetTopology(ctx, tenant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Version != 2 || string(current.JSON) != string(replacement) {
+		t.Fatalf("stale allocation writeback overwrote concurrent save: version=%d json=%s", current.Version, current.JSON)
+	}
+	if _, err := base.PromoteStaged(ctx, tenant); !errors.Is(err, ErrNoStagedBundle) {
+		t.Fatalf("stale topology produced a promotable staged set: %v", err)
+	}
+}
+
+func TestSaveTopologyWaitsForWholeStageTransaction(t *testing.T) {
+	base := NewMemStore()
+	tenant := TenantID("topology-save-stage-serialization")
+	ctx := putStageTopo(t, base, tenant)
+	approveNode(t, ctx, base, tenant, "node-router", genWGPubKey(t))
+
+	store := &blockingStagedSetStore{
+		Store:          base,
+		replaceEntered: make(chan struct{}),
+		replaceRelease: make(chan struct{}),
+		putCalled:      make(chan struct{}, 1),
+	}
+	stageDone := make(chan error, 1)
+	go func() {
+		_, err := CompileAndStage(ctx, store, tenant, time.Now().UTC())
+		stageDone <- err
+	}()
+	select {
+	case <-store.replaceEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stage did not reach staged-set publication")
+	}
+
+	replacement := stageTestTopo()
+	replacement.Project.Name = "Saved while stage was publishing"
+	raw, err := json.Marshal(replacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saveDone := make(chan error, 1)
+	go func() {
+		_, err := SaveTopology(ctx, store, tenant, raw)
+		saveDone <- err
+	}()
+
+	select {
+	case <-store.putCalled:
+		t.Fatal("operator topology save entered Store while stage still held the tenant transaction")
+	case <-time.After(100 * time.Millisecond):
+		// Expected: SaveTopology is parked on the tenant operation lock.
+	}
+	close(store.replaceRelease)
+	if err := <-stageDone; err != nil {
+		t.Fatalf("CompileAndStage: %v", err)
+	}
+	if err := <-saveDone; err != nil {
+		t.Fatalf("SaveTopology: %v", err)
+	}
+
+	current, err := base.GetTopology(ctx, tenant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(current.JSON) != string(raw) {
+		t.Fatalf("save did not linearize immediately after stage: %s", current.JSON)
+	}
 }
 
 // approveNode enrolls a node into the registry as NodeApproved with a public key.
@@ -263,6 +391,24 @@ func TestCompileAndStage_RenderWhatsReady(t *testing.T) {
 		clientPub := genWGPubKey(t)
 		approveNode(t, ctx, store, tnt, "node-router", routerPub)
 		approveNode(t, ctx, store, tnt, "node-peer", peerPub)
+		storedClientEdge := func(when string) model.Edge {
+			t.Helper()
+			rec, err := store.GetTopology(ctx, tnt)
+			if err != nil {
+				t.Fatalf("GetTopology %s: %v", when, err)
+			}
+			var stored model.Topology
+			if err := json.Unmarshal(rec.JSON, &stored); err != nil {
+				t.Fatalf("unmarshal stored topology %s: %v", when, err)
+			}
+			for _, edge := range stored.Edges {
+				if edge.ID == "e-client" {
+					return edge
+				}
+			}
+			t.Fatalf("stored topology %s is missing e-client", when)
+			return model.Edge{}
+		}
 
 		// First stage + promote with only router+peer.
 		res1, err := CompileAndStage(ctx, store, tnt, time.Now())
@@ -308,6 +454,33 @@ func TestCompileAndStage_RenderWhatsReady(t *testing.T) {
 		// And a current bundle now exists for the client itself.
 		if _, err := store.GetCurrentBundle(ctx, tnt, "node-client"); err != nil {
 			t.Errorf("GetCurrentBundle(node-client): %v", err)
+		}
+
+		// Regression: an unchanged third stage must accept and retain the endpoint-specific
+		// client allocation persisted by the second stage.
+		before := storedClientEdge("after second stage")
+		if before.PinnedFromPort != 0 {
+			t.Fatalf("stored client-side port = %d, want 0", before.PinnedFromPort)
+		}
+		if before.PinnedToPort == 0 || before.CompiledPort != before.PinnedToPort {
+			t.Fatalf("stored router/compiled ports are inconsistent: %+v", before)
+		}
+		if before.PinnedFromTransitIP == "" || before.PinnedToTransitIP == "" ||
+			before.PinnedFromLinkLocal == "" || before.PinnedToLinkLocal == "" {
+			t.Fatalf("stored client address allocation is incomplete: %+v", before)
+		}
+		if _, err := CompileAndStage(ctx, store, tnt, time.Now()); err != nil {
+			t.Fatalf("CompileAndStage(third, unchanged client topology): %v", err)
+		}
+		after := storedClientEdge("after third stage")
+		if after.PinnedFromPort != 0 ||
+			after.PinnedToPort != before.PinnedToPort ||
+			after.PinnedFromTransitIP != before.PinnedFromTransitIP ||
+			after.PinnedToTransitIP != before.PinnedToTransitIP ||
+			after.PinnedFromLinkLocal != before.PinnedFromLinkLocal ||
+			after.PinnedToLinkLocal != before.PinnedToLinkLocal ||
+			after.CompiledPort != before.CompiledPort {
+			t.Fatalf("stored client allocation changed on unchanged third stage:\n  before: %+v\n  after:  %+v", before, after)
 		}
 	})
 }

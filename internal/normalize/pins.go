@@ -1,9 +1,12 @@
 // Package normalize cleans up a topology's persisted allocation pins so it validates and compiles
-// cleanly. Its one job today is HealCollidingPins: the inverse of the semantic validator's
-// cross-link pin dedup, used to repair the "pin occupied by two different links" corruption that
-// older incremental-enrollment compiles could persist (a fresh subgraph re-allocating a transit IP
-// / port / link-local that an out-of-subgraph edge still pinned). The allocator's reservation pass
-// (compiler.BuildReservedFromExcludedEdges) PREVENTS new instances; this CLEANS existing ones.
+// cleanly. HealCollidingPins repairs both historical allocation corruptions that can be identified
+// without operator intent:
+//   - a client endpoint carrying a per-link listen-port pin (the non-client endpoint port and the
+//     full transit/link-local pairs remain valid sticky allocations); and
+//   - different enabled links claiming the same port, transit IP, or link-local value.
+//
+// The allocator prevents new cross-link collisions. This package is the migration boundary that
+// cleans records created by older versions or by role changes over already-allocated edges.
 package normalize
 
 import (
@@ -23,19 +26,15 @@ func canonicalIP(value string) string {
 	return value
 }
 
-// isClientTouched reports whether either endpoint of the edge is a client node. Mirrors the
-// validator: client edges use a single wg0 with no per-peer resources, so their pins are not part
-// of cross-link dedup and must never be stripped (or claimed) by the heal.
-func isClientTouched(e *model.Edge, roleByNode map[string]string) bool {
-	return roleByNode[e.FromNodeID] == "client" || roleByNode[e.ToNodeID] == "client"
-}
-
-// HealCollidingPins strips the allocation pins (six pinned_* fields + CompiledPort) from any edge
-// whose pinned port / transit IP / link-local collides with another ENABLED edge of a DIFFERENT
-// link identity — exactly the conflict the semantic validator reports as "occupied by two different
-// links". The stripped edge re-allocates fresh on the next compile (the allocator's reserve-then-
-// gap-fill keeps every other edge's value stable, so only the colliding edge moves). It returns
-// whether anything changed, and mutates topo.Edges in place.
+// HealCollidingPins first clears only a port pin attached to a client endpoint, including on a
+// disabled edge that may later be enabled. A client uses one shared wg0, but its non-client endpoint
+// still owns a real per-link interface/listen port and the complete transit/link-local pair is
+// rendered there, so those values remain sticky. It then strips all six pins plus CompiledPort from
+// any edge whose valid pinned port / transit IP / link-local collides with another ENABLED edge of a
+// DIFFERENT link identity — exactly the
+// conflict the semantic validator reports as "occupied by two different links". A colliding edge
+// re-allocates fresh on the next compile. The function returns whether anything changed and mutates
+// topo.Edges in place.
 //
 // Which colliding edge keeps its pin — the discriminator (C2, plan-8 Phase 6.3).
 // model.Edge has no age/timestamp field (topology.go carries only IsEnabled + slice order), so
@@ -72,7 +71,9 @@ func isClientTouched(e *model.Edge, roleByNode map[string]string) bool {
 // is exactly the one reserve-first allocation reproduces).
 //
 // It mirrors the validator's dedup precisely:
-//   - disabled edges and client-touched edges are skipped (neither checked nor claimed);
+//   - disabled edges are skipped (neither checked nor claimed);
+//   - an ordinary link claims a complete port pair, while a client link claims its valid
+//     non-client-side port individually;
 //   - link identity is linkid.LinkKey (primary class folds A->B / B->A and same-pair primaries into
 //     one link, so their legitimately-mirrored equal values never count as a collision; each backup
 //     is its own link);
@@ -85,9 +86,9 @@ func isClientTouched(e *model.Edge, roleByNode map[string]string) bool {
 // claim them all (no collision) or strip the edge and claim nothing (collision) — so a partially
 // colliding edge never leaves a stale half-claim behind.
 //
-// Scope: only COMPLETE pin pairs participate (both ends present), matching the allocator's
-// reservation unit. A single-ended (incomplete) pin is a distinct corruption that the validator
-// flags separately (CodePin*Incomplete) and the heal deliberately does not claim to repair.
+// Scope: transit and link-local claims, and ordinary-link port claims, participate only as COMPLETE
+// pairs. The non-client-side port on a client link is the deliberate one-sided exception. Any other
+// incomplete pin remains a distinct corruption for the validator to report.
 func HealCollidingPins(topo *model.Topology) bool {
 	if topo == nil {
 		return false
@@ -95,6 +96,21 @@ func HealCollidingPins(topo *model.Topology) bool {
 	roleByNode := make(map[string]string, len(topo.Nodes))
 	for i := range topo.Nodes {
 		roleByNode[topo.Nodes[i].ID] = topo.Nodes[i].Role
+	}
+
+	// Clear only the endpoint-local port that became meaningless when its node became a client. The
+	// valid non-client-side port, complete address pairs, and CompiledPort are preserved.
+	changed := false
+	for i := range topo.Edges {
+		e := &topo.Edges[i]
+		if roleByNode[e.FromNodeID] == "client" && e.PinnedFromPort != 0 {
+			e.PinnedFromPort = 0
+			changed = true
+		}
+		if roleByNode[e.ToNodeID] == "client" && e.PinnedToPort != 0 {
+			e.PinnedToPort = 0
+			changed = true
+		}
 	}
 
 	type portKey struct {
@@ -116,7 +132,7 @@ func HealCollidingPins(topo *model.Topology) bool {
 	order := make([]int, 0, len(topo.Edges))
 	for i := range topo.Edges {
 		e := &topo.Edges[i]
-		if !e.IsEnabled || isClientTouched(e, roleByNode) {
+		if !e.IsEnabled {
 			continue
 		}
 		order = append(order, i)
@@ -130,7 +146,6 @@ func HealCollidingPins(topo *model.Topology) bool {
 		return order[a] < order[b]
 	})
 
-	changed := false
 	for _, i := range order {
 		e := &topo.Edges[i]
 		link := linkid.LinkKey(e)
@@ -142,7 +157,14 @@ func HealCollidingPins(topo *model.Topology) bool {
 			value string
 		}
 		var claims []claim
-		if e.PinnedFromPort > 0 && e.PinnedToPort > 0 {
+		fromClient := roleByNode[e.FromNodeID] == "client"
+		toClient := roleByNode[e.ToNodeID] == "client"
+		switch {
+		case fromClient && !toClient && e.PinnedToPort > 0:
+			claims = append(claims, claim{kind: 0, pk: portKey{e.ToNodeID, e.PinnedToPort}})
+		case toClient && !fromClient && e.PinnedFromPort > 0:
+			claims = append(claims, claim{kind: 0, pk: portKey{e.FromNodeID, e.PinnedFromPort}})
+		case !fromClient && !toClient && e.PinnedFromPort > 0 && e.PinnedToPort > 0:
 			claims = append(claims,
 				claim{kind: 0, pk: portKey{e.FromNodeID, e.PinnedFromPort}},
 				claim{kind: 0, pk: portKey{e.ToNodeID, e.PinnedToPort}})
@@ -198,14 +220,19 @@ func HealCollidingPins(topo *model.Topology) bool {
 	return changed
 }
 
-// stripPins clears the six allocation pins plus the read-only CompiledPort, returning the edge to an
-// unpinned state so the next compile re-derives its allocation.
-func stripPins(e *model.Edge) {
-	e.CompiledPort = 0
+// stripAllocationPins clears only the six persisted allocation pins.
+func stripAllocationPins(e *model.Edge) {
 	e.PinnedFromPort = 0
 	e.PinnedToPort = 0
 	e.PinnedFromTransitIP = ""
 	e.PinnedToTransitIP = ""
 	e.PinnedFromLinkLocal = ""
 	e.PinnedToLinkLocal = ""
+}
+
+// stripPins clears the six allocation pins plus the read-only CompiledPort, returning the edge to an
+// unpinned state so the next compile re-derives its allocation.
+func stripPins(e *model.Edge) {
+	e.CompiledPort = 0
+	stripAllocationPins(e)
 }

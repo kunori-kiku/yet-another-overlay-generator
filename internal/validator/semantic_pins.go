@@ -43,7 +43,7 @@ type pinOwner struct {
 // Pins are stored per edge and oriented by "that edge's own from/to": for edge A->B, PinnedFromPort
 // is the A-side port and PinnedToPort is the B-side port; the reverse edge B->A carries the mirror
 // of the same pair (its PinnedFromPort is the B-side port). Therefore this function:
-//   - validates structural rules (partial pin, port out of range, transit out of pool, client-edge
+//   - validates structural rules (partial pin, port out of range, transit out of pool, client-side
 //     port pin) per edge, acting on the edge itself;
 //   - validates deduplication rules (the same node port, the same transit IP, or the same link-local
 //     occupied by two distinct links) by grouping on linkKey and comparing across links: a primary
@@ -80,25 +80,22 @@ func validateAllocationPins(topo *model.Topology, domainMap map[string]*model.Do
 		// cross-link conflict.
 		link := linkid.LinkKey(&edge)
 
-		// --- Rule: a client edge carries pins (client uses a single wg0, no per-peer resources). ---
-		// Handled before the other rules: all per-peer pins on a client edge are ignored, so a port
-		// pin errors, the remaining pins (transit / link-local) warn "will be ignored", and the rest
-		// of the checks that only make sense for per-peer links (pair completeness, range, out of
-		// pool, deduplication) are skipped.
-		clientTouched := fromNode.Role == "client" || toNode.Role == "client"
-		if clientTouched {
-			if edge.PinnedFromPort != 0 || edge.PinnedToPort != 0 {
-				result.AddError(prefix, CodePinClientPortPin, P{"id", edge.ID})
-			}
-			if edge.PinnedFromTransitIP != "" || edge.PinnedToTransitIP != "" ||
-				edge.PinnedFromLinkLocal != "" || edge.PinnedToLinkLocal != "" {
-				result.AddWarning(prefix, CodePinClientAllocationIgnored, P{"id", edge.ID})
-			}
-			continue
+		// --- Rule: the client endpoint cannot carry a per-link port pin. ---
+		// A client uses one shared wg0, but the non-client endpoint still owns a real per-client
+		// interface/listen port. Therefore a client link deliberately permits one router-side port
+		// pin while rejecting only the value attached to the client endpoint. Transit and link-local
+		// addresses remain a complete, rendered pair and go through the ordinary validation below.
+		fromClient := fromNode.Role == "client"
+		toClient := toNode.Role == "client"
+		clientTouched := fromClient || toClient
+		if (fromClient && edge.PinnedFromPort != 0) || (toClient && edge.PinnedToPort != 0) {
+			result.AddError(prefix, CodePinClientPortPin, P{"id", edge.ID})
 		}
 
 		// --- Rule: partial pin (one end pinned, the other empty). Checked per resource. ---
-		validatePinPairCompleteness(prefix, edge, result)
+		// Port pairing is skipped only for a client link, whose valid shape is client-side zero plus
+		// one non-client-side port. Transit and link-local pins are paired for every link shape.
+		validatePinPairCompleteness(prefix, edge, !clientTouched, result)
 
 		// --- Rule: port out of range (below allocconst.MinPinnedPort (1024, the manual lower bound after
 		// the PR7 relaxation), or > 65535). ---
@@ -123,11 +120,11 @@ func validateAllocationPins(topo *model.Topology, domainMap map[string]*model.Do
 	}
 }
 
-// validatePinPairCompleteness validates "paired pins": for each resource, having one end pinned and
-// the other empty is illegal. Pins must appear as complete pairs, otherwise the compiler cannot
-// construct both-end configs for a link.
-func validatePinPairCompleteness(prefix string, edge model.Edge, result *ValidationResult) {
-	if (edge.PinnedFromPort != 0) != (edge.PinnedToPort != 0) {
+// validatePinPairCompleteness validates paired pins. Transit and link-local values always require
+// both ends. Ports normally do too, except that a client link deliberately has only the
+// non-client endpoint's per-link listen port.
+func validatePinPairCompleteness(prefix string, edge model.Edge, requirePortPair bool, result *ValidationResult) {
+	if requirePortPair && (edge.PinnedFromPort != 0) != (edge.PinnedToPort != 0) {
 		result.AddError(prefix, CodePinPortIncomplete, P{"id", edge.ID})
 	}
 	if (edge.PinnedFromTransitIP != "") != (edge.PinnedToTransitIP != "") {

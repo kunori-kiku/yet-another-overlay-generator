@@ -9,6 +9,7 @@ import {
 } from './NodeResourceHistory';
 import {
   HISTORY_CHART_FAMILIES,
+  configuredHistoryProbeSelector,
   createLatestRequestCoordinator,
   createObservedRequestScheduler,
   historyRefreshFailed,
@@ -18,6 +19,7 @@ import {
   type HistoryChartFamily,
   type NodeHistory,
 } from '../../lib/telemetryHistory';
+import type { TelemetryProbe } from '../../types/topology';
 
 const RESOURCE_HISTORY: NodeHistory = {
   step: '30s',
@@ -31,6 +33,7 @@ const RESOURCE_HISTORY: NodeHistory = {
     memUsedPct: { avg: 50, min: 48, max: 52 },
   }],
   probes: [],
+  devices: [],
 };
 
 const PROBE_HISTORY: NodeHistory = {
@@ -53,6 +56,28 @@ const PROBE_HISTORY: NodeHistory = {
       failureReasons: {},
     }],
   }],
+  devices: [],
+};
+
+const DEVICE_ID = 'd'.repeat(64);
+const DEVICE_HISTORY: NodeHistory = {
+  step: '30s',
+  disabled: false,
+  buckets: [],
+  probes: [],
+  devices: [{
+    seriesId: 'e'.repeat(64),
+    deviceId: DEVICE_ID,
+    kind: 'block_device',
+    buckets: [{
+      t: '2026-07-16T10:00:00Z',
+      metrics: {
+        disk_read_bytes_per_second: { avg: 1024, min: 0, max: 2048 },
+        disk_write_bytes_per_second: { avg: 512 },
+        disk_io_busy_pct: { avg: 25 },
+      },
+    }],
+  }],
 };
 
 const COMMON_PROPS = {
@@ -61,6 +86,9 @@ const COMMON_PROPS = {
   language: 'en',
   selectedProbeID: 'edge',
   onSelectProbeID: () => undefined,
+  deviceTelemetryEnabled: false,
+  selectedDeviceID: null,
+  onSelectDeviceID: () => undefined,
 } as const;
 
 const FAMILY_FIXTURES = {
@@ -72,13 +100,31 @@ const FAMILY_FIXTURES = {
   probe: {
     ...COMMON_PROPS,
     history: PROBE_HISTORY,
-    configuredProbes: [{ id: 'edge', type: 'tcp', host: 'edge.example.test', port: 443 }],
+    configuredProbes: [{ id: 'edge', name: 'Edge HTTPS', type: 'tcp', host: 'edge.example.test', port: 443 }],
+  },
+  device: {
+    ...COMMON_PROPS,
+    history: DEVICE_HISTORY,
+    configuredProbes: [],
+    deviceTelemetryEnabled: true,
+    selectedDeviceID: DEVICE_ID,
+    deviceInventory: {
+      devices: [{
+        seriesId: DEVICE_ID,
+        kind: 'block_device',
+        label: 'NVMe data disk',
+        capacityBytes: 1024 * 1024,
+        status: 'ok',
+      }],
+      truncated: 0,
+    },
   },
 } satisfies Record<HistoryChartFamily, HistoryChartFamilySectionProps>;
 
 const EXPECTED_SERIES = {
   resource: 'timeseries-series-cpu',
   probe: 'timeseries-series-probe-latency',
+  device: 'timeseries-series-disk_read_bytes_per_second',
 } satisfies Record<HistoryChartFamily, string>;
 
 describe('history chart-family renderer registry', () => {
@@ -90,10 +136,115 @@ describe('history chart-family renderer registry', () => {
       }));
 
       expect(html, `${family} must render TimeSeriesChart`).toContain('data-testid="timeseries-chart"');
+      expect(html, `${family} chart must expose an accessible image summary`).toContain('role="img"');
+      expect(html, `${family} chart must expose its visible title as a name`).toContain('aria-label=');
+      expect(html, `${family} chart must associate its numeric summary`).toContain('aria-describedby=');
       expect(html, `${family} must register a concrete plotted series`).toContain(
         `data-testid="${EXPECTED_SERIES[family]}"`,
       );
     }
+  });
+
+  it('summarizes the plotted values for non-visual chart readers', () => {
+    const html = renderToStaticMarkup(createElement(HistoryChartFamilySection, {
+      family: 'resource',
+      ...FAMILY_FIXTURES.resource,
+    }));
+
+    expect(html).toContain('CPU: latest 25%; minimum 20%; maximum 30%.');
+  });
+
+  it('shows the friendly probe name while retaining the immutable id and exact destination', () => {
+    const html = renderToStaticMarkup(createElement(HistoryChartFamilySection, {
+      family: 'probe',
+      ...FAMILY_FIXTURES.probe,
+    }));
+
+    expect(html).toContain('Edge HTTPS · edge · TCP · edge.example.test:443');
+  });
+
+  it('reuses latency and availability charts for URL mismatches without a status-code chart', () => {
+    const history: NodeHistory = {
+      step: '30s',
+      disabled: false,
+      buckets: [],
+      probes: [{
+        seriesId: 'f'.repeat(64),
+        id: 'health',
+        type: 'url',
+        url: 'https://service.example/health',
+        expectedStatus: 204,
+        intervalMS: 30_000,
+        buckets: [{
+          t: '2026-07-16T10:00:00Z',
+          attempts: 1,
+          successes: 0,
+          failures: 1,
+          latencyMS: { avg: 18, min: 18, max: 18 },
+          failureReasons: { unexpected_status: 1 },
+        }],
+      }],
+      devices: [],
+    };
+    const html = renderToStaticMarkup(createElement(HistoryChartFamilySection, {
+      family: 'probe',
+      ...COMMON_PROPS,
+      history,
+      selectedProbeID: 'health',
+      configuredProbes: [{
+        id: 'health',
+        name: 'Customer API',
+        type: 'url',
+        url: 'https://service.example/health',
+        expected_status: 204,
+      }],
+    }));
+
+    expect(html).toContain('Customer API · health · URL · https://service.example/health · 204');
+    expect(html).toContain('data-testid="timeseries-series-probe-latency"');
+    expect(html).toContain('data-testid="timeseries-series-probe-availability"');
+    expect(html).toContain('Unexpected HTTP status');
+    expect(html).not.toContain('status-code-chart');
+    expect(html).not.toContain('Latest HTTP status');
+  });
+
+  it('reuses the same chart adapter for GPU utilization and VRAM history', () => {
+    const gpuID = 'f'.repeat(64);
+    const html = renderToStaticMarkup(createElement(HistoryChartFamilySection, {
+      family: 'device',
+      ...COMMON_PROPS,
+      history: {
+        step: '30s',
+        disabled: false,
+        buckets: [],
+        probes: [],
+        devices: [{
+          seriesId: 'a'.repeat(64),
+          deviceId: gpuID,
+          kind: 'gpu',
+          buckets: [{
+            t: '2026-07-16T10:00:00Z',
+            metrics: { gpu_utilization_pct: { avg: 40 }, gpu_vram_used_pct: { avg: 60 } },
+          }],
+        }],
+      },
+      configuredProbes: [],
+      deviceTelemetryEnabled: true,
+      selectedDeviceID: gpuID,
+      deviceInventory: {
+        devices: [{
+          seriesId: gpuID,
+          kind: 'gpu',
+          label: 'NVIDIA accelerator',
+          vendor: 'NVIDIA',
+          status: 'ok',
+        }],
+        truncated: 0,
+      },
+    }));
+
+    expect(html).toContain('data-testid="timeseries-series-gpu_utilization_pct"');
+    expect(html).toContain('data-testid="timeseries-series-gpu_vram_used_pct"');
   });
 });
 
@@ -113,6 +264,24 @@ describe('node history component request/state seams', () => {
     observationKey: string;
     seen: string;
   }
+
+  it('omits a malformed nonblank probe draft so resource and device history remain loadable', () => {
+    expect(configuredHistoryProbeSelector({
+      id: 'draft', type: 'icmp', host: 'https://not-a-bare-host.example/path',
+    })).toBeUndefined();
+    expect(configuredHistoryProbeSelector({
+      id: 'ready', type: 'tcp', host: 'resolver.example.', port: 53,
+    })).toEqual({ id: 'ready', type: 'tcp', host: 'resolver.example.', port: 53 });
+    expect(configuredHistoryProbeSelector({
+      id: 'bad id', type: 'icmp', host: 'resolver.example.',
+    })).toBeUndefined();
+    expect(configuredHistoryProbeSelector({
+      id: 'bad-url', type: 'url', url: 'https://service.example/%zz',
+    })).toBeUndefined();
+    expect(configuredHistoryProbeSelector({
+      id: 'future', type: 'future', host: 'resolver.example.',
+    } as unknown as TelemetryProbe)).toBeUndefined();
+  });
 
   it('does not request again when this node lastSeen is unchanged', () => {
     const request = vi.fn();

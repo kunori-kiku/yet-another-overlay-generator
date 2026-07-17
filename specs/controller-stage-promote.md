@@ -1,170 +1,109 @@
-# Controller stage and promote orchestration
+# Controller stage and promote
 
-<!-- last-verified: 2026-07-16 -->
+<!-- last-verified: 2026-07-17 -->
 
 ## Responsibility
 
-Project the stored design onto the nodes whose public identities are ready, run the shared compile
-pipeline in agent-held custody, stage only bundles that need delivery, construct the optional
-off-host-signable membership manifest, and keep promotion as the sole operation that makes a new
-generation live.
+Own the deployment transaction from a saved topology snapshot to a promoted generation: select the
+deployment-ready subgraph, drive the shared AgentHeld compile path, conditionally persist allocation
+pins, publish one exact staged candidate, and make promotion the only go-live transition
+(`internal/controller/compile_subgraph.go:21-106`, `internal/controller/compile_stage.go:76-196`,
+`internal/controller/compile_promote.go:12-73`).
 
 ## Files
 
-- `internal/controller/compile.go:48-181` defines `StageResult`, bundle-content identity, delta-skip
-  eligibility, fetch settings, and exported-directory loading.
-- `internal/controller/compile_subgraph.go:21-240` builds the ready subgraph, invokes
-  `internal/localcompile` in `AgentHeld` custody, reserves pins belonging to excluded edges, and
-  writes compiled allocation pins back into the full topology.
-- `internal/controller/compile_manualnode.go:19-110` validates operator-asserted manual-node public
-  identities and enforces cross-source key uniqueness.
-- `internal/controller/compile_stage.go:21-330` owns stage options and the mutating stage sequence.
-- `internal/controller/compile_preview.go:18-110` performs the read-only deploy preview using the
-  same digest and delta-skip decisions.
-- `internal/controller/keystone.go:18-225` reconciles the bundle-signing anchor and assembles the
-  staged membership manifest.
-- `internal/controller/compile_promote.go:12-70` applies the keystone signature gate and promotes.
-- `internal/controller/storecore_stage.go` implements the durable staged-set seal and the exact-set
-  store transition shared by MemStore and FileStore.
-- `internal/controller/tenantlock.go:3-28` serializes multi-call stage, promote, enrollment, and
-  rekey operations per tenant in this single-process controller.
+- `internal/controller/compile.go:51-75` — defines the staged, unchanged, skipped, policy-omitted,
+  and provisional-generation result contract.
+- `internal/controller/compile.go:122-157` — defines served-bundle identity and the shared keystone
+  first-pin/rotation exception to delta skipping.
+- `internal/controller/compile_subgraph.go:21-218` — projects readiness and calls the canonical
+  `localcompile` facade in AgentHeld custody.
+- `internal/controller/compile_subgraph.go:233-288` — merges compiled allocation pins into the full
+  topology through a versioned compare-and-set.
+- `internal/controller/compile_manualnode.go:19-79` — validates the public identities asserted for
+  manual nodes before they enter bundles or membership.
+- `internal/controller/compile_stage.go:22-339` — owns force/policy options and the mutating stage
+  sequence.
+- `internal/controller/compile_preview.go:41-145` — runs the read-only counterpart with the same
+  readiness, digest, and full-restage decisions.
+- `internal/controller/compile_promote.go:12-73` — applies the optional off-host signature gate and
+  delegates the already-sealed flip to the Store.
+- `internal/controller/tenantlock.go:28-45` — serializes topology Save with multi-call deployment
+  operations for one tenant.
 
-The operator endpoints are implemented in `internal/api/handler_deploy.go:20-176`: `stage` accepts
-optional force controls, `deploy-preview` describes the unforced blast radius, `compile-preview`
-returns the rendered ready subgraph without writes, and `promote` flips the staged generation.
+## Inputs
 
-## Admission and compilation
+`CompileAndStage` receives a tenant, timestamp, and optional force or telemetry-policy deployment
+mode, then loads the versioned public topology, node registry, and controller settings
+(`internal/controller/compile_stage.go:47-80`, `internal/controller/compile_stage.go:92-134`).
+Managed readiness requires an approved registry node with a public key; manual readiness uses its
+validated topology public key. A client is withheld until its enabled target is also ready, and
+edges with either endpoint absent are omitted (`internal/controller/compile_subgraph.go:127-218`).
 
-`CompileAndStage` loads and parses the stored topology, heals pre-existing allocation-pin
-collisions, loads the node registry and controller settings, then calls `CompileSubgraph`
-(`internal/controller/compile_stage.go:81-123`).
+Executable policy preparation comes from [Telemetry policy](telemetry-policy.md), bundle bytes and
+tier-one signatures come from [Artifacts and signing](artifacts-signing.md), and the optional
+membership record comes from [Keystone and trust lists](keystone-trustlist.md)
+(`internal/controller/compile_stage.go:121-123`, `internal/controller/compile_stage.go:198-217`,
+`internal/controller/compile_stage.go:302-320`).
 
-A managed node is ready only when its registry record is approved and has a non-empty WireGuard
-public key. A manual node is ready from the public key asserted in the topology; it never enrolls.
-Before either preview or stage, every manual public key must be present, valid, and unique across
-manual and approved managed nodes (`internal/controller/compile_manualnode.go:19-79`). Edges with
-an unready endpoint are dropped. A ready client whose required dial target is not ready is also
-excluded until a later deploy. Only excluded managed nodes appear in `SkippedUnenrolled`.
+## Outputs
 
-The projection overwrites managed topology keys from the registry and clears every
-`WireGuardPrivateKey`, including stray values on manual imports. `CompileSubgraph` then calls the
-canonical `internal/localcompile` facade with `render.AgentHeld`; rendered private-key locations
-contain `PRIVATEKEY_PLACEHOLDER`, never real key material
-(`internal/controller/compile_subgraph.go:21-90,93-182`). Allocation pins held by edges outside the
-ready subgraph are reserved so incremental enrollment cannot allocate over them.
+Stage returns exact node-ID lists for changed, unchanged, not-ready managed, and compatibility-
+projected nodes. Its generation is `current+1` only when a non-empty candidate was published;
+zero-change deployment returns the current generation (`internal/controller/compile.go:51-75`,
+`internal/controller/compile_stage.go:276-300`, `internal/controller/compile_stage.go:332-338`).
 
-The `update-topology` API also enforces this custody boundary before storage: it rejects any
-non-empty `wireguard_private_key`, heals colliding pins, and stores the canonical checked model
-instead of unchecked raw bytes (`internal/api/handler_topology.go:23-65`).
+The candidate passed to `ReplaceStagedSet` contains only changed bundles at one provisional
+generation plus an optional manifest binding the full ready fleet, including unchanged nodes
+(`internal/controller/compile_stage.go:228-274`, `internal/controller/compile_stage.go:302-320`).
+After the keystone gate, Store promotion writes current bundles, desired generations, and the signed
+served trust list before committing the new generation last (`internal/controller/compile_promote.go:40-73`,
+`internal/controller/storecore_stage.go:466-499`). Persistence mechanics and served snapshots belong
+to [Controller store](controller-store.md).
 
-## Stage sequence
+## Decision points (if any)
 
-The complete mutating stage runs under the per-tenant operation lock:
+- No stored topology is a benign no-op. An existing topology with no ready nodes clears the active
+  staged set before signer resolution, so obsolete bytes cannot remain promotable because a signing
+  key is unavailable (`internal/controller/compile_stage.go:92-100`,
+  `internal/controller/compile_stage.go:135-151`).
+- A freshly compiled checksum digest equal to the currently served digest is unchanged unless force
+  was selected or keystone first-pin/rotation requires a complete restage. Missing or unreadable
+  comparison data fails toward staging (`internal/controller/compile.go:122-157`,
+  `internal/controller/compile_stage.go:182-190`, `internal/controller/compile_stage.go:243-274`).
+- If every ready node is unchanged, stage clears any older candidate and emits no promotable
+  generation; otherwise one `ReplaceStagedSet` call publishes the exact changed set
+  (`internal/controller/compile_stage.go:276-300`, `internal/controller/compile_stage.go:314-338`).
+- With no pinned credential, promotion uses the compatibility path. With one, the staged manifest
+  must carry a non-empty signature that verifies against the current pin before Store promotion is
+  attempted (`internal/controller/compile_promote.go:40-73`).
 
-1. Project readiness before resolving any signing key. If no node is ready, purge every stale
-   staged bundle and audit `stage-empty`; no render/export bytes exist, so a broken signing-key file
-   is irrelevant to this cleanup path.
-2. For a non-empty subgraph, resolve `YAOG_BUNDLE_SIGNING_KEY` exactly once. Pass that same in-memory
-   `ConfigSigner` snapshot into `localcompile`/render, signing-anchor reconciliation, and
-   `artifacts.ExportWithSigner`. The public key embedded in `install.sh`, the persisted public
-   anchor, `signing-pubkey.pem`, and `bundle.sig` therefore cannot come from different filesystem
-   reads if the configured key file changes during a stage.
-3. Compile the ready subgraph and persist only allocation write-backs into the full stored
-   topology. A byte-identical write-back is skipped to preserve bounded topology history.
-4. Reconcile the signer snapshot against the tenant's persisted signing anchor before export. A
-   first configured key is pinned by trust on first use; dropping a pinned key or swapping it
-   without the explicit rotation opt-in fails closed (`internal/controller/keystone.go:78-123`).
-5. Export with the same signer snapshot to a controller-owned temporary directory and read each
-   node directory into the store's slash-keyed file map.
-6. Compare `hex(sha256(checksums.sha256))` with the node's currently served digest. A match is
-   `Unchanged` and is not staged, unless the operator forced that node/all nodes or keystone first
-   pin/credential rotation requires a full restage (`internal/controller/compile.go:115-150` and
-   `internal/controller/compile_stage.go:200-255`). Uncertainty fails toward staging.
-7. With keystone enabled, build an unsigned canonical manifest for off-host signing. Its members
-   include every ready node—both changed and unchanged—with that node's public key and bundle
-   digest. This prevents delta-skipped nodes from disappearing from the trust set
-   (`internal/controller/compile_stage.go`).
-8. Publish the changed bundles and optional manifest through `ReplaceStagedSet`. The store deletes
-   the prior `staged-set.json` seal first, writes every candidate bundle, prunes every record outside
-   the exact changed set, writes the manifest, and writes a seal containing the provisional
-   generation, sorted node IDs, and manifest hash/epoch last. A process crash before the final seal
-   can leave loose files, but they cannot promote after restart.
+## Invariants
 
-`StageResult` reports node IDs in `Staged`, `UnchangedNodeIDs`, and `SkippedUnenrolled` plus the
-provisional generation. Staging itself never advances the tenant generation.
+- Compilation never imports private custody: the ready projection replaces managed keys from the
+  registry, clears every topology private key, and invokes `localcompile` with `render.AgentHeld`
+  (`internal/controller/compile_subgraph.go:130-148`, `internal/controller/compile_subgraph.go:194-208`,
+  `internal/controller/compile_subgraph.go:85-106`).
+- Topology Save and stage share the tenant operation lock; allocation write-back additionally checks
+  the originally loaded version. A concurrent Save therefore remains intact and stale staging returns
+  `ErrTopologyChanged` before export or staged-set mutation (`internal/controller/tenantlock.go:37-45`,
+  `internal/controller/compile_subgraph.go:241-288`, `internal/controller/compile_stage.go:191-217`,
+  `internal/controller/storecore.go:225-251`).
+- Loose files are never deployment authority: replacement invalidates the old seal first and writes
+  the exact generation/node-set/manifest seal last; promotion revalidates it and commits generation
+  only after current bundles and the served trust list (`internal/controller/storecore_stage.go:234-374`,
+  `internal/controller/storecore_stage.go:420-499`).
 
-## Empty and unchanged stages
+## Gotchas (optional)
 
-No stored topology is a benign no-op. If the topology exists but has no ready nodes, stage still
-purges all previously staged bundles and audits `stage-empty`; otherwise a removed design could
-leave an old root-executed bundle promotable. Readiness is evaluated before loading the optional
-signer so an unreadable key cannot strand that stale bundle (`internal/controller/compile_stage.go:121-149`).
-
-If every ready bundle is byte-identical to the served bundle, nothing is promotable. The controller
-clears every promotable staged bundle and candidate seal, returns the current generation with all
-ready nodes in `UnchangedNodeIDs`, does not regenerate the manifest, and audits `stage-unchanged`
-(`internal/controller/compile_stage.go:257-280`).
-
-For API/status compatibility, the most recent manifest may remain readable behind a seal marked
-`historical`. That marker has no node IDs, cannot promote, and is never inherited by direct
-incremental staging; it exists only so the panel can continue showing the last epoch. The separate
-history record remains the compiler's monotonic-epoch base.
-
-These purges are custody controls, not cleanup conveniences: a prior stage awaiting a signature
-must not survive a later reverted or empty design and become live on an unrelated promote.
-
-## Keystone and promotion
-
-Keystone is enabled by a pinned operator credential. `buildStagedManifest` returns canonical
-trust-list bytes with an empty signature for the seal-last batch. Its monotonic epoch is reused only
-when the complete mapping
-`node_id -> (wg_public_key,bundle_sha256)` is identical to the prior staged manifest; otherwise it
-increments, starting at zero (`internal/controller/keystone.go:125-196`). A separate history record
-preserves that epoch base when an abandoned stage is cleared; history is never served and never
-authorizes promotion. The operator obtains the active sealed bytes, signs them off-host, and submits
-the detached signature. Signature installation may replace only `SignatureJSON` over the same sealed
-canonical bytes and epoch.
-
-`PromoteStaged` holds the same tenant lock. With keystone off it delegates directly to the store.
-With keystone on it refuses a missing manifest, empty signature, malformed credential binding, or
-signature that does not verify against the currently pinned credential
-(`internal/controller/compile_promote.go:32-70`). Successful promotion flips only bundles staged
-for the expected next generation, advances the tenant generation, stamps desired generations on
-affected registry nodes, publishes the signed manifest, and wakes long-poll waiters.
-
-The store independently requires the exact sealed generation and sorted bundle set, plus a
-byte/epoch match for the optional manifest. Missing seals, loose same-generation records, and
-manifest substitutions return `ErrIncompleteStagedSet` (also matching `ErrNoStagedBundle`) without
-changing live state. Promotion retains staged inputs until the generation counter commits last, so a
-pre-commit crash can re-drive the whole flip rather than losing the already-copied subset.
-
-The controller's promote gate verifies the signature over the stored manifest but deliberately
-does not re-derive each staged bundle digest. The agent is the authoritative offline check: it
-hashes its received `checksums.sha256`, binds that digest to its signed member entry, verifies the
-bundle, and only then applies it.
-
-## Preview and force controls
-
-`POST /deploy-preview` compiles and exports the posted current canvas without storing topology,
-pins, bundles, manifests, or audits. It shares the served digest and keystone full-restage decision
-with the real stage and reports each ready node as changed or unchanged
-(`internal/controller/compile_preview.go:37-110`).
-
-`POST /stage` accepts an empty body for normal delta behavior, `{force_all:true}` for a fleet-wide
-redeploy, or `force_nodes` for drift recovery on selected nodes. Force changes delivery, not the
-compiled content or trust model.
-
-## Invariants and gotchas
-
-- Promotion is the only go-live transition; repeated stage operations do not consume generation
-  numbers.
-- A generation bump between stage and promote invalidates the provisional set; re-stage rather
-  than promoting bundles compiled before the bump.
-- Loose staged JSON is not authority. Only the durable `staged-set.json` seal written after every
-  component authorizes promotion; a clean restage is the recovery operation after a partial write.
-- Staged bundle membership is the changed delivery set, while keystone manifest membership is the
-  full ready trust set. They intentionally differ under delta-skip.
-- Trust-list files are appended at config-serving time and never included inside the bundle whose
-  checksum digest they bind.
-- Controller compile, preview, and stage all use the shared localcompile/render path; no entrypoint
-  has an alternate compiler.
+- A partial stage write is intentionally inert until a clean restage overwrites/prunes it and
+  publishes a new seal; the error matches both `ErrIncompleteStagedSet` and `ErrNoStagedBundle`
+  (`internal/controller/storecore_stage.go:40-42`, `internal/controller/storecore_stage.go:276-370`,
+  `internal/controller/storecore_stage.go:434-463`).
+- If promotion crashes after copying live records but before generation commits, later stage and
+  generation mutations fail with `ErrUncommittedPromotion`; retrying the exact sealed promotion is
+  the recovery path because staged inputs remain until the commit point
+  (`internal/controller/storecore_stage.go:56-91`, `internal/controller/storecore_stage.go:420-422`,
+  `internal/controller/storecore_stage.go:466-505`).
+- Post-commit staged cleanup is best-effort. Its remaining seal is stale or explicitly historical,
+  so it cannot authorize another promotion (`internal/controller/storecore_stage.go:501-521`).

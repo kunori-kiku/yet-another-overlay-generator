@@ -75,6 +75,24 @@ func (t *Telemetry) setProbeCompletionKick(kick func()) {
 	}
 }
 
+// telemetryCompletionKicker is the generic cadence-to-upload seam for independently sampled
+// metrics whose every completed observation must reach the reliable replay queue. Unlike additive
+// probe windows, these registered metrics do not require protocol capability negotiation.
+type telemetryCompletionKicker interface {
+	setTelemetryCompletionKick(func())
+}
+
+func (t *Telemetry) setTelemetryCompletionKick(kick func()) {
+	if t == nil {
+		return
+	}
+	for _, sampler := range t.samplers {
+		if kicker, ok := sampler.(telemetryCompletionKicker); ok {
+			kicker.setTelemetryCompletionKick(kick)
+		}
+	}
+}
+
 // Collect runs every Sampler under a recover guard and merges their output. Conditions are merged by
 // Type (a later sampler's condition of the same Type supersedes an earlier one — mirroring the
 // controller's wholesale per-report replace), preserving first-seen order for a stable display.
@@ -168,11 +186,13 @@ func NewTelemetryForTest(samplers ...Sampler) *Telemetry {
 func BuildTelemetry(stateDir string) *Telemetry {
 	samplers := []Sampler{
 		conditionSampler{stateDir: stateDir},
-		newActiveProbeSampler(stateDir), // signed last-known-good policy; asynchronous and bounded
-		wireguardPeersSampler{},         // per-peer link detail → metrics["wireguard_peers"] (collapsible panel)
-		&resourceSampler{},              // host CPU% + load + memory → metrics["resource"] (STATEFUL: cpu_pct is a /proc/stat delta, so the pointer's snapshot survives across beats)
-		nativeXDPSampler{},              // egress NIC native-XDP capability heuristic → metrics["native_xdp"] (pre-deploy warning)
-		mimicCapabilitySampler{},        // can this node build/load the mimic kernel module → metrics["mimic_capability"] (pre-deploy warning)
+		agentCapabilitiesSampler{},          // exact executable feature tokens → metrics["agent_capabilities"]
+		newActiveProbeSampler(stateDir),     // signed last-known-good policy; asynchronous and bounded
+		newDeviceTelemetrySampler(stateDir), // signed opt-in; independent bounded disk/GPU cadence
+		wireguardPeersSampler{},             // per-peer link detail → metrics["wireguard_peers"] (collapsible panel)
+		&resourceSampler{},                  // host CPU% + load + memory → metrics["resource"] (STATEFUL: cpu_pct is a /proc/stat delta, so the pointer's snapshot survives across beats)
+		nativeXDPSampler{},                  // egress NIC native-XDP capability heuristic → metrics["native_xdp"] (pre-deploy warning)
+		mimicCapabilitySampler{},            // can this node build/load the mimic kernel module → metrics["mimic_capability"] (pre-deploy warning)
 	}
 	if err := validateProductionMetricDefinitions(samplers); err != nil {
 		// This is a static programmer invariant over BuildTelemetry plus telemetrymetric.All, not an

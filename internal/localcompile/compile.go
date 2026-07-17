@@ -59,15 +59,16 @@ func CompileResult(req CompileRequest) (*compiler.CompileResult, error) {
 // CompileResult(req)/Compile(req) entry points pass context.Background(). cmd/compiler likewise
 // has no request ctx.
 func CompileResultCtx(ctx context.Context, req CompileRequest) (*compiler.CompileResult, error) {
-	// Compile on a copy of the topology's Node/Edge slices so the façade never mutates the
-	// caller's input: render.GenerateKeysWith writes the derived WireGuard keys onto nodes in
-	// place, and we keep that write-back confined to our copy. (The compiler already allocates
-	// IPs and writes pins onto its own fresh copies — compiler.go CompileAt — so only the key
-	// write-back would otherwise alias the caller.) The canonical written-back topology, with
-	// keys + allocated pins/IPs, is the returned result.Topology.
+	// Compile on a copy of every topology collection so in-place normalization and key write-back
+	// never mutate the caller. ValidateSchema defaults domain routing modes and edge transports,
+	// while render.GenerateKeysWith writes derived WireGuard keys onto nodes. The compiler performs
+	// allocation write-back on its own fresh topology, and the canonical normalized/compiled value is
+	// returned through result.Topology.
 	topo := req.Topology
+	topo.Domains = append([]model.Domain(nil), req.Topology.Domains...)
 	topo.Nodes = append([]model.Node(nil), req.Topology.Nodes...)
 	topo.Edges = append([]model.Edge(nil), req.Topology.Edges...)
+	topo.RoutePolicies = append([]model.RoutePolicy(nil), req.Topology.RoutePolicies...)
 
 	// nil Keygen ⇒ the default wgtypesKeygen, keeping production byte-identical to the
 	// pre-seam pipeline. render consumes its own (structurally-identical) Keygen
@@ -138,9 +139,12 @@ func ArtifactsFromResult(result *compiler.CompileResult, signer bundlesig.Config
 
 	for _, node := range result.Topology.Nodes {
 		// The per-node checksummed bundle file set — one source of truth (artifacts.BundleFiles)
-		// for relpath keys and set membership (including README.txt and the artifacts.json guard), shared
+		// for relpath keys and set membership (including README.txt and optional artifacts/telemetry guards), shared
 		// with the on-disk exporter so the two can never drift.
-		bundleFiles := artifacts.BundleFiles(result, node.ID)
+		bundleFiles, err := artifacts.BundleFiles(result, node.ID)
+		if err != nil {
+			return CompileArtifacts{}, fmt.Errorf("build bundle files for node %s: %w", node.ID, err)
+		}
 		out.Files[node.ID] = bundleFiles
 
 		// The canonical checksums.sha256 content over this node's bundle (sorted by

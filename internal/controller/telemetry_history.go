@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,13 +16,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/devicemetric"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/probemetric"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/probepolicy"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrymetric"
 )
 
-// telemetry_history.go is the controller's bounded, per-(tenant,node) resource and active-probe
-// history — the durable backing for the node-detail charts. It is layered strictly ON TOP of the
+// telemetry_history.go is the controller's bounded, per-(tenant,node) resource, active-probe, and
+// numeric-device history — the durable backing for the node-detail charts. It is layered strictly ON TOP of the
 // telemetry heartbeat: RecordTelemetry appends one bounded projection IN-MEMORY (NO disk IO — preserving
 // the RecordTelemetry "a 30s heartbeat must never fsync" DoS invariant), and a SEPARATE background
 // flusher (FileStore only) drains the buffer to append-only per-node JSONL off the heartbeat path. It
@@ -68,6 +70,9 @@ const (
 	// windows handles either ordering of overlapping snapshots without making the heartbeat path grow
 	// per fleet lifetime. Query deduplication remains the restart-safe backstop after a restart.
 	maxProbeHistoryRecentKeys = probemetric.MaxRecentSamples * 2
+	// One replay queue can hold 32 distinct completion snapshots. Retain that many full device
+	// batches so cached latest-value heartbeats and upload retries cannot consume history capacity.
+	maxDeviceHistoryRecentKeys = (devicemetric.MaxDiskEntries + devicemetric.MaxGPUEntries) * 32
 )
 
 // historyFlushInterval is how often the background flusher drains the in-memory buffer to disk. Well
@@ -88,41 +93,60 @@ type ResourceSample struct {
 	MemAvailKB uint64    `json:"mem_available_kb,omitempty"`
 }
 
-// ProbeHistorySample is one completed, typed ICMP/TCP attempt admitted to bounded history. SeriesID is
-// derived from the exact executable identity (id/type/host/port), so reusing a human id for a changed
-// destination never splices two targets into one chart. CheckedAt has already been parsed and bounded
-// against the enclosing telemetry sample before this value reaches the store.
+// ProbeHistorySample is one completed, typed active-probe attempt admitted to bounded history.
+// SeriesID is derived from the exact executable identity (id/type/host/port or
+// id/type/url/expected-status), so reusing a human id for a changed destination or URL success contract
+// never splices two targets into one chart. CheckedAt has already been parsed and bounded against the
+// enclosing telemetry sample before this value reaches the store. Actual URL status is intentionally
+// omitted: it is categorical latest-result metadata, not retained chart data.
 type ProbeHistorySample struct {
-	SeriesID      string    `json:"series_id"`
-	ID            string    `json:"id"`
-	Type          string    `json:"type"`
-	Host          string    `json:"host"`
-	Port          int       `json:"port,omitempty"`
-	Status        string    `json:"status"`
-	LatencyMS     *float64  `json:"latency_ms,omitempty"`
-	CheckedAt     time.Time `json:"checked_at"`
-	FailureReason string    `json:"failure_reason,omitempty"`
-	IntervalMS    int64     `json:"interval_ms,omitempty"`
+	SeriesID       string    `json:"series_id"`
+	ID             string    `json:"id"`
+	Type           string    `json:"type"`
+	Host           string    `json:"host,omitempty"`
+	Port           int       `json:"port,omitempty"`
+	URL            string    `json:"url,omitempty"`
+	ExpectedStatus int       `json:"expected_status,omitempty"`
+	Status         string    `json:"status"`
+	LatencyMS      *float64  `json:"latency_ms,omitempty"`
+	CheckedAt      time.Time `json:"checked_at"`
+	FailureReason  string    `json:"failure_reason,omitempty"`
+	IntervalMS     int64     `json:"interval_ms,omitempty"`
 }
 
-// TelemetryHistorySnapshot is one coherent query over the shared resource/probe history. Both
-// projections come from the same disk/inflight/buffer merge, avoiding duplicate JSONL scans and
-// preventing one response from observing two different flush states.
+// DeviceHistorySample is one bounded numeric device observation. DeviceID is the opaque inventory
+// identity reported by the agent; SeriesID is derived from the exact (kind, DeviceID) pair so mutable
+// labels, mount points, vendors, models, and support status can never splice chart series.
+type DeviceHistorySample struct {
+	SeriesID string                              `json:"series_id"`
+	DeviceID string                              `json:"device_id"`
+	Kind     devicemetric.Kind                   `json:"kind"`
+	TS       time.Time                           `json:"ts"`
+	Values   map[devicemetric.NumericKey]float64 `json:"values"`
+}
+
+// TelemetryHistorySnapshot is one coherent query over the shared resource/probe/device history. The
+// selected projections come from the same disk/inflight/buffer merge, avoiding duplicate JSONL scans
+// and preventing one response from observing two different flush states.
 type TelemetryHistorySnapshot struct {
 	Resources []ResourceSample
 	Probes    []ProbeHistorySample
+	Devices   []DeviceHistorySample
 }
 
-// TelemetryHistoryQueryOptions controls additive store-level probe filtering. The zero value returns
-// resource history with no probe attempts; a non-empty ProbeSeriesID admits only that exact executable
-// series. The legacy unfiltered snapshot method remains available for omitted-filter compatibility.
+// TelemetryHistoryQueryOptions controls additive store-level exact-series filtering. The zero value
+// returns resource history only. AllProbeSeries preserves the established omitted-probe-selector API
+// shape while DeviceSeriesID remains exact-only: there is deliberately no all-device query mode.
 type TelemetryHistoryQueryOptions struct {
-	ProbeSeriesID string
+	AllProbeSeries bool
+	ProbeSeriesID  string
+	DeviceSeriesID string
 }
 
-type telemetryHistoryProbeFilter struct {
-	all      bool
-	seriesID string
+type telemetryHistoryFilter struct {
+	allProbes      bool
+	probeSeriesID  string
+	deviceSeriesID string
 }
 
 // telemetryHistoryRecord is one accepted heartbeat's retained projection. Resource remains a pointer
@@ -133,12 +157,30 @@ type telemetryHistoryRecord struct {
 	Resource      *ResourceSample
 	RecordedAt    time.Time
 	ProbeAttempts []ProbeHistorySample
+	DeviceSamples []DeviceHistorySample
 	// encodedBytes is the exact in-memory JSONL size (including '\n') used only for volatile retention
 	// accounting. MarshalJSON deliberately omits it, and disk-decoded records need not populate it.
 	encodedBytes int64
 }
 
 type telemetryHistoryRecordJSON struct {
+	TS            *time.Time            `json:"ts,omitempty"`
+	IntervalMS    int64                 `json:"interval_ms,omitempty"`
+	CpuPct        *float64              `json:"cpu_pct,omitempty"`
+	Load1         float64               `json:"load1"`
+	Load5         float64               `json:"load5"`
+	Load15        float64               `json:"load15"`
+	MemTotalKB    uint64                `json:"mem_total_kb,omitempty"`
+	MemAvailKB    uint64                `json:"mem_available_kb,omitempty"`
+	RecordedAt    *time.Time            `json:"recorded_at,omitempty"`
+	ProbeAttempts []ProbeHistorySample  `json:"probe_attempts,omitempty"`
+	DeviceSamples []DeviceHistorySample `json:"device_samples,omitempty"`
+}
+
+// telemetryHistoryRecordScanJSON keeps the bounded device array opaque during a filtered FileStore
+// scan. Exact queries inspect only row identities and fully decode the one selected row; an omitted
+// selector skips device materialization altogether.
+type telemetryHistoryRecordScanJSON struct {
 	TS            *time.Time           `json:"ts,omitempty"`
 	IntervalMS    int64                `json:"interval_ms,omitempty"`
 	CpuPct        *float64             `json:"cpu_pct,omitempty"`
@@ -149,10 +191,11 @@ type telemetryHistoryRecordJSON struct {
 	MemAvailKB    uint64               `json:"mem_available_kb,omitempty"`
 	RecordedAt    *time.Time           `json:"recorded_at,omitempty"`
 	ProbeAttempts []ProbeHistorySample `json:"probe_attempts,omitempty"`
+	DeviceSamples json.RawMessage      `json:"device_samples,omitempty"`
 }
 
 func (r telemetryHistoryRecord) MarshalJSON() ([]byte, error) {
-	w := telemetryHistoryRecordJSON{ProbeAttempts: r.ProbeAttempts}
+	w := telemetryHistoryRecordJSON{ProbeAttempts: r.ProbeAttempts, DeviceSamples: r.DeviceSamples}
 	if r.Resource != nil {
 		ts := r.Resource.TS
 		w.TS = &ts
@@ -197,6 +240,14 @@ func (r *telemetryHistoryRecord) UnmarshalJSON(data []byte) error {
 	if over := len(r.ProbeAttempts) - maxProbeHistoryAttemptsPerRecord; over > 0 {
 		r.ProbeAttempts = r.ProbeAttempts[over:]
 	}
+	for _, sample := range w.DeviceSamples {
+		if validStoredDeviceHistorySample(sample) {
+			r.DeviceSamples = append(r.DeviceSamples, cloneDeviceHistorySample(sample))
+		}
+	}
+	if over := len(r.DeviceSamples) - (devicemetric.MaxDiskEntries + devicemetric.MaxGPUEntries); over > 0 {
+		r.DeviceSamples = r.DeviceSamples[over:]
+	}
 	return nil
 }
 
@@ -206,11 +257,27 @@ func validStoredProbeHistorySample(sample ProbeHistorySample) bool {
 	}
 	result := probemetric.Result{
 		ID: sample.ID, Type: sample.Type, Host: sample.Host, Port: sample.Port,
+		URL: sample.URL, ExpectedStatus: sample.ExpectedStatus,
 		Status: sample.Status, LatencyMS: sample.LatencyMS,
 		CheckedAt:     sample.CheckedAt.UTC().Format(time.RFC3339Nano),
 		FailureReason: sample.FailureReason, IntervalMS: sample.IntervalMS,
 	}
-	return probemetric.Valid(result, false) && sample.SeriesID == probemetric.SeriesID(result)
+	return probemetric.ValidHistoryProjection(result) && sample.SeriesID == probemetric.SeriesID(result)
+}
+
+func validStoredDeviceHistorySample(sample DeviceHistorySample) bool {
+	if sample.TS.IsZero() {
+		return false
+	}
+	seriesID, err := devicemetric.HistorySeriesID(sample.Kind, sample.DeviceID)
+	if err != nil || sample.SeriesID != seriesID {
+		return false
+	}
+	return devicemetric.ValidateSamples(devicemetric.SamplesMetric{Samples: []devicemetric.Sample{{
+		SeriesID: sample.DeviceID,
+		Kind:     sample.Kind,
+		Values:   sample.Values,
+	}}}) == nil
 }
 
 // resourceSampleFromMetrics projects metrics["resource"] into a ResourceSample. ok=false when the key is
@@ -253,6 +320,7 @@ func resourceSampleFromRaw(raw json.RawMessage, at time.Time, interval time.Dura
 type telemetryHistoryProjection struct {
 	resource *ResourceSample
 	probes   []ProbeHistorySample
+	devices  []DeviceHistorySample
 }
 
 type telemetryHistoryProjector func(json.RawMessage, time.Time, time.Duration) telemetryHistoryProjection
@@ -291,6 +359,12 @@ var telemetryHistoryProjectors = map[string]telemetryHistoryProjectorRegistratio
 			return telemetryHistoryProjection{probes: probeHistorySamplesFromRaw(raw, at, probepolicy.MaxProbes, true)}
 		},
 	},
+	telemetrymetric.DeviceSamples.Key: {
+		family: telemetrymetric.ChartFamilyDevice,
+		project: func(raw json.RawMessage, at time.Time, _ time.Duration) telemetryHistoryProjection {
+			return telemetryHistoryProjection{devices: deviceHistorySamplesFromRaw(raw, at)}
+		},
+	},
 }
 
 var telemetryHistoryFamilyAccumulators = map[telemetrymetric.ChartFamily]telemetryHistoryFamilyAccumulator{
@@ -301,6 +375,9 @@ var telemetryHistoryFamilyAccumulators = map[telemetrymetric.ChartFamily]telemet
 	},
 	telemetrymetric.ChartFamilyProbe: func(record *telemetryHistoryRecord, projection telemetryHistoryProjection) {
 		record.ProbeAttempts = append(record.ProbeAttempts, projection.probes...)
+	},
+	telemetrymetric.ChartFamilyDevice: func(record *telemetryHistoryRecord, projection telemetryHistoryProjection) {
+		record.DeviceSamples = append(record.DeviceSamples, projection.devices...)
 	},
 }
 
@@ -374,6 +451,58 @@ func telemetryHistoryRecordFromMetrics(metrics map[string]json.RawMessage, at ti
 	return record
 }
 
+// deviceHistorySamplesFromRaw strictly projects only the bounded numeric half of device telemetry.
+// Inventory/status/display metadata never reaches retained history. Malformed payloads become a chart
+// gap and never fail the outer heartbeat.
+func deviceHistorySamplesFromRaw(raw json.RawMessage, at time.Time) []DeviceHistorySample {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var metric devicemetric.SamplesMetric
+	if err := decoder.Decode(&metric); err != nil {
+		return nil
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil
+	}
+	if err := devicemetric.ValidateSamples(metric); err != nil {
+		return nil
+	}
+	at = at.UTC()
+	if metric.SampledAt != "" {
+		collectedAt, err := time.Parse(time.RFC3339Nano, metric.SampledAt)
+		if err != nil || collectedAt.IsZero() {
+			return nil
+		}
+		collectedAt = collectedAt.UTC()
+		// The collection clock is advisory, just like probe checked_at. Drop an impossible value
+		// rather than stamping cached readings as fresh heartbeat observations.
+		if collectedAt.Before(at.Add(-maxTelemetryReplayAge)) || collectedAt.After(at.Add(maxTelemetryFutureSkew)) {
+			return nil
+		}
+		at = collectedAt
+	}
+	out := make([]DeviceHistorySample, 0, len(metric.Samples))
+	for _, sample := range metric.Samples {
+		seriesID, err := devicemetric.HistorySeriesID(sample.Kind, sample.SeriesID)
+		if err != nil {
+			return nil
+		}
+		values := make(map[devicemetric.NumericKey]float64, len(sample.Values))
+		for key, value := range sample.Values {
+			values[key] = value
+		}
+		out = append(out, DeviceHistorySample{
+			SeriesID: seriesID,
+			DeviceID: sample.SeriesID,
+			Kind:     sample.Kind,
+			TS:       at,
+			Values:   values,
+		})
+	}
+	return out
+}
+
 func probeHistorySamplesFromRaw(raw json.RawMessage, outerAt time.Time, max int, allowPending bool) []ProbeHistorySample {
 	decoded := probemetric.DecodeArray(raw, max, allowPending)
 	out := make([]ProbeHistorySample, 0, len(decoded))
@@ -395,6 +524,7 @@ func probeHistorySamplesFromRaw(raw json.RawMessage, outerAt time.Time, max int,
 		out = append(out, ProbeHistorySample{
 			SeriesID: probemetric.SeriesID(result),
 			ID:       result.ID, Type: result.Type, Host: result.Host, Port: result.Port,
+			URL: result.URL, ExpectedStatus: result.ExpectedStatus,
 			Status: result.Status, LatencyMS: result.LatencyMS, CheckedAt: checkedAt,
 			FailureReason: result.FailureReason, IntervalMS: result.IntervalMS,
 		})
@@ -420,12 +550,20 @@ type nodeHist struct {
 	// appended it is true and queries read that batch from disk instead, so logical-cap accounting never
 	// spends two slots on the same observation.
 	inflightOnDisk bool
-	fileLines      int
+	// flushEpoch changes at every in-flight drain/commit/clear/requeue transition. Queries compare
+	// the epoch around their disk scan and retry if the scan crossed a transition, preventing a newly
+	// durable duplicate batch from consuming suffix slots reserved for its volatile copy.
+	flushEpoch uint64
+	fileLines  int
 	// recentProbeKeys is an in-memory exact-attempt deduper for overlapping probe_samples windows and
 	// repeated rc.9 probe_results snapshots. It is bounded and deliberately not loaded from disk on the
 	// heartbeat path; query-time dedupe covers the first repeated snapshot after controller restart.
 	recentProbeKeys  map[probeHistoryIdentity]struct{}
 	recentProbeOrder []probeHistoryIdentity
+	// recentDeviceKeys suppresses repeated latest snapshots by their actual local collection time.
+	// It is volatile and bounded; query-time exact dedupe remains the restart backstop.
+	recentDeviceKeys  map[deviceHistoryIdentity]struct{}
+	recentDeviceOrder []deviceHistoryIdentity
 }
 
 // telemetryHistory holds the per-(tenant,node) buffers. dir != "" (FileStore) flushes to JSONL under
@@ -445,6 +583,12 @@ type telemetryHistory struct {
 	flushMu sync.Mutex
 	// writeBatch is an injected seam for deterministic drain/write visibility tests.
 	writeBatch func(TenantID, string, []telemetryHistoryRecord, int) error
+	// beforeDiskRead is an injected test seam used to place a flush commit between a query's volatile
+	// snapshot and durable scan. Production leaves it nil.
+	beforeDiskRead func()
+	// afterQueryCapRead is an injected test seam used to place a cap publication before the query's
+	// volatile snapshot. Production leaves it nil.
+	afterQueryCapRead func()
 
 	capMu       sync.RWMutex
 	capByTenant map[TenantID]int
@@ -543,6 +687,10 @@ func (h *telemetryHistory) applyCapChange(t TenantID, cap int) {
 	h.mu.Lock()
 	if byNode := h.nodes[t]; byNode != nil {
 		for _, entry := range byNode {
+			// A query may already have snapshotted this tenant's former logical cap. Advance the
+			// same coherence epoch used by flush transitions before trimming the volatile suffix;
+			// a disk scan crossing this boundary will retry against one complete retention policy.
+			entry.flushEpoch++
 			trimTelemetryHistoryBuffer(entry, cap, h.volatileByteLimit()-entry.inflightBytes)
 		}
 	}
@@ -633,7 +781,7 @@ func (h *telemetryHistory) appendMetrics(t TenantID, nodeID string, metrics map[
 }
 
 func (h *telemetryHistory) appendRecord(t TenantID, nodeID string, record telemetryHistoryRecord) {
-	if record.Resource == nil && len(record.ProbeAttempts) == 0 {
+	if record.Resource == nil && len(record.ProbeAttempts) == 0 && len(record.DeviceSamples) == 0 {
 		return
 	}
 	cap := h.capFor(t)
@@ -644,7 +792,8 @@ func (h *telemetryHistory) appendRecord(t TenantID, nodeID string, record teleme
 	defer h.mu.Unlock()
 	e := h.entryLocked(t, nodeID)
 	record.ProbeAttempts = e.filterNewProbeAttempts(record.ProbeAttempts)
-	if record.Resource == nil && len(record.ProbeAttempts) == 0 {
+	record.DeviceSamples = e.filterNewDeviceSamples(record.DeviceSamples)
+	if record.Resource == nil && len(record.ProbeAttempts) == 0 && len(record.DeviceSamples) == 0 {
 		return
 	}
 	encodedBytes, err := telemetryHistoryRecordEncodedBytes(record)
@@ -710,6 +859,38 @@ func (e *nodeHist) filterNewProbeAttempts(samples []ProbeHistorySample) []ProbeH
 			copy(e.recentProbeOrder, e.recentProbeOrder[1:])
 			e.recentProbeOrder = e.recentProbeOrder[:len(e.recentProbeOrder)-1]
 		}
+	}
+	return out
+}
+
+type deviceHistoryIdentity struct {
+	seriesID  string
+	sampledAt int64
+}
+
+func (e *nodeHist) filterNewDeviceSamples(samples []DeviceHistorySample) []DeviceHistorySample {
+	if len(samples) == 0 {
+		return nil
+	}
+	if e.recentDeviceKeys == nil {
+		e.recentDeviceKeys = make(map[deviceHistoryIdentity]struct{}, maxDeviceHistoryRecentKeys)
+	}
+	out := make([]DeviceHistorySample, 0, len(samples))
+	for _, sample := range samples {
+		key := deviceHistoryIdentity{seriesID: sample.SeriesID, sampledAt: sample.TS.UnixNano()}
+		if _, duplicate := e.recentDeviceKeys[key]; duplicate {
+			continue
+		}
+		e.recentDeviceKeys[key] = struct{}{}
+		e.recentDeviceOrder = append(e.recentDeviceOrder, key)
+		out = append(out, sample)
+	}
+	if over := len(e.recentDeviceOrder) - maxDeviceHistoryRecentKeys; over > 0 {
+		for _, oldest := range e.recentDeviceOrder[:over] {
+			delete(e.recentDeviceKeys, oldest)
+		}
+		copy(e.recentDeviceOrder, e.recentDeviceOrder[over:])
+		e.recentDeviceOrder = e.recentDeviceOrder[:len(e.recentDeviceOrder)-over]
 	}
 	return out
 }
@@ -904,6 +1085,7 @@ func (h *telemetryHistory) flushOnce() {
 			e.inflight = e.buf
 			e.inflightBytes = e.bufBytes
 			e.inflightOnDisk = false
+			e.flushEpoch++
 			e.buf = nil
 			e.bufBytes = 0
 			jobs = append(jobs, flushJob{t: t, nodeID: nodeID, samples: e.inflight})
@@ -933,6 +1115,7 @@ func (h *telemetryHistory) clearInflight(t TenantID, nodeID string) {
 	e.inflight = nil
 	e.inflightBytes = 0
 	e.inflightOnDisk = false
+	e.flushEpoch++
 }
 
 // requeueInflight atomically moves the failed in-flight batch back to the FRONT of the buffer. The
@@ -949,6 +1132,7 @@ func (h *telemetryHistory) requeueInflight(t TenantID, nodeID string, cap int) {
 	e.inflight = nil
 	e.inflightBytes = 0
 	e.inflightOnDisk = false
+	e.flushEpoch++
 	e.buf = requeued
 	e.bufBytes = requeuedBytes
 	trimTelemetryHistoryBuffer(e, cap, h.volatileByteLimit())
@@ -1380,6 +1564,7 @@ func (h *telemetryHistory) markInflightOnDisk(t TenantID, nodeID string, samples
 	// helper/test write from accidentally marking an unrelated in-flight batch durable.
 	if len(e.inflight) > 0 && &e.inflight[0] == &samples[0] {
 		e.inflightOnDisk = true
+		e.flushEpoch++
 	}
 }
 
@@ -1403,7 +1588,7 @@ func (h *telemetryHistory) query(t TenantID, nodeID string, from, to time.Time) 
 }
 
 func (h *telemetryHistory) queryContext(ctx context.Context, t TenantID, nodeID string, from, to time.Time) ([]ResourceSample, error) {
-	snapshot, err := h.querySnapshotWithFilterContext(ctx, t, nodeID, from, to, telemetryHistoryProbeFilter{})
+	snapshot, err := h.querySnapshotWithFilterContext(ctx, t, nodeID, from, to, telemetryHistoryFilter{})
 	if err != nil {
 		return nil, err
 	}
@@ -1415,7 +1600,7 @@ func (h *telemetryHistory) queryProbes(t TenantID, nodeID string, from, to time.
 }
 
 func (h *telemetryHistory) queryProbesContext(ctx context.Context, t TenantID, nodeID string, from, to time.Time) ([]ProbeHistorySample, error) {
-	snapshot, err := h.querySnapshotWithFilterContext(ctx, t, nodeID, from, to, telemetryHistoryProbeFilter{all: true})
+	snapshot, err := h.querySnapshotWithFilterContext(ctx, t, nodeID, from, to, telemetryHistoryFilter{allProbes: true})
 	if err != nil {
 		return nil, err
 	}
@@ -1427,20 +1612,25 @@ func (h *telemetryHistory) querySnapshot(t TenantID, nodeID string, from, to tim
 }
 
 func (h *telemetryHistory) querySnapshotContext(ctx context.Context, t TenantID, nodeID string, from, to time.Time) (TelemetryHistorySnapshot, error) {
-	return h.querySnapshotWithFilterContext(ctx, t, nodeID, from, to, telemetryHistoryProbeFilter{all: true})
+	return h.querySnapshotWithFilterContext(ctx, t, nodeID, from, to, telemetryHistoryFilter{allProbes: true})
 }
 
 func (h *telemetryHistory) querySnapshotFilteredContext(ctx context.Context, t TenantID, nodeID string, from, to time.Time, options TelemetryHistoryQueryOptions) (TelemetryHistorySnapshot, error) {
-	return h.querySnapshotWithFilterContext(ctx, t, nodeID, from, to, telemetryHistoryProbeFilter{seriesID: options.ProbeSeriesID})
+	return h.querySnapshotWithFilterContext(ctx, t, nodeID, from, to, telemetryHistoryFilter{
+		allProbes:      options.AllProbeSeries && options.ProbeSeriesID == "",
+		probeSeriesID:  options.ProbeSeriesID,
+		deviceSeriesID: options.DeviceSeriesID,
+	})
 }
 
-func (h *telemetryHistory) querySnapshotWithFilterContext(ctx context.Context, t TenantID, nodeID string, from, to time.Time, probeFilter telemetryHistoryProbeFilter) (TelemetryHistorySnapshot, error) {
-	records, err := h.queryRecordsWithFilterContext(ctx, t, nodeID, from, to, probeFilter)
+func (h *telemetryHistory) querySnapshotWithFilterContext(ctx context.Context, t TenantID, nodeID string, from, to time.Time, filter telemetryHistoryFilter) (TelemetryHistorySnapshot, error) {
+	records, err := h.queryRecordsWithFilterContext(ctx, t, nodeID, from, to, filter)
 	if err != nil {
 		return TelemetryHistorySnapshot{}, err
 	}
 	resources := make([]ResourceSample, 0, len(records))
 	var probes []ProbeHistorySample
+	var devices []DeviceHistorySample
 	for i, record := range records {
 		if i%128 == 0 {
 			if err := ctx.Err(); err != nil {
@@ -1455,6 +1645,11 @@ func (h *telemetryHistory) querySnapshotWithFilterContext(ctx context.Context, t
 				probes = append(probes, cloneProbeHistorySample(sample))
 			}
 		}
+		for _, sample := range record.DeviceSamples {
+			if inWindow(sample.TS, from, to) {
+				devices = append(devices, cloneDeviceHistorySample(sample))
+			}
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return TelemetryHistorySnapshot{}, err
@@ -1462,6 +1657,7 @@ func (h *telemetryHistory) querySnapshotWithFilterContext(ctx context.Context, t
 	return TelemetryHistorySnapshot{
 		Resources: sortAndDedupeResourceSamples(resources),
 		Probes:    dedupeProbeHistorySamples(probes),
+		Devices:   sortAndDedupeDeviceHistorySamples(devices),
 	}, nil
 }
 
@@ -1481,33 +1677,66 @@ func cloneProbeHistorySample(sample ProbeHistorySample) ProbeHistorySample {
 	return sample
 }
 
+func cloneDeviceHistorySample(sample DeviceHistorySample) DeviceHistorySample {
+	if sample.Values != nil {
+		values := make(map[devicemetric.NumericKey]float64, len(sample.Values))
+		for key, value := range sample.Values {
+			values[key] = value
+		}
+		sample.Values = values
+	}
+	return sample
+}
+
 // queryRecords merges the durable JSONL with both the in-flight flush batch and the ordinary in-memory
 // buffer. It snapshots volatile records BEFORE reading disk: whether a concurrent flush drains, writes,
 // or completes afterwards, each resource/probe observation remains visible on at least one side. The
 // typed query functions perform exact deduplication after this merge. Returns nil when disabled.
 func (h *telemetryHistory) queryRecords(t TenantID, nodeID string, from, to time.Time) ([]telemetryHistoryRecord, error) {
-	return h.queryRecordsWithFilterContext(context.Background(), t, nodeID, from, to, telemetryHistoryProbeFilter{all: true})
+	return h.queryRecordsWithFilterContext(context.Background(), t, nodeID, from, to, telemetryHistoryFilter{allProbes: true})
 }
 
 func (h *telemetryHistory) queryRecordsContext(ctx context.Context, t TenantID, nodeID string, from, to time.Time) ([]telemetryHistoryRecord, error) {
-	return h.queryRecordsWithFilterContext(ctx, t, nodeID, from, to, telemetryHistoryProbeFilter{all: true})
+	return h.queryRecordsWithFilterContext(ctx, t, nodeID, from, to, telemetryHistoryFilter{allProbes: true})
 }
 
-func (h *telemetryHistory) queryRecordsWithFilterContext(ctx context.Context, t TenantID, nodeID string, from, to time.Time, probeFilter telemetryHistoryProbeFilter) ([]telemetryHistoryRecord, error) {
+func (h *telemetryHistory) queryRecordsWithFilterContext(ctx context.Context, t TenantID, nodeID string, from, to time.Time, filter telemetryHistoryFilter) ([]telemetryHistoryRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	for {
+		records, stable, err := h.queryRecordsSnapshotWithFilterContext(ctx, t, nodeID, from, to, filter)
+		if err != nil {
+			return nil, err
+		}
+		if stable {
+			return records, nil
+		}
+		// A flush crossed the volatile snapshot/disk-read boundary. Retry from a fresh coherent epoch;
+		// transitions are finite and the request context remains authoritative if storage stalls.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+}
+
+func (h *telemetryHistory) queryRecordsSnapshotWithFilterContext(ctx context.Context, t TenantID, nodeID string, from, to time.Time, filter telemetryHistoryFilter) ([]telemetryHistoryRecord, bool, error) {
 	cap := h.capFor(t)
 	if cap <= 0 {
-		return nil, nil
+		return nil, true, nil
+	}
+	if h.afterQueryCapRead != nil {
+		h.afterQueryCapRead()
 	}
 
 	// Snapshot only the newest logical volatile suffix. inflight is included until its exact slice has
 	// reached disk; afterwards inflightOnDisk makes disk the sole source during flush completion.
 	var volatileRaw []telemetryHistoryRecord
+	var snapshotFlushEpoch uint64
 	h.mu.Lock()
 	if byNode := h.nodes[t]; byNode != nil {
 		if e := byNode[nodeID]; e != nil {
+			snapshotFlushEpoch = e.flushEpoch
 			includeInflight := !e.inflightOnDisk
 			volatileCount := len(e.buf)
 			if includeInflight {
@@ -1531,17 +1760,17 @@ func (h *telemetryHistory) queryRecordsWithFilterContext(ctx context.Context, t 
 	}
 	h.mu.Unlock()
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	volatile := make([]telemetryHistoryRecord, 0, len(volatileRaw))
 	for i, record := range volatileRaw {
 		if i%128 == 0 {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return nil, false, err
 			}
 		}
-		record = filterTelemetryHistoryRecordProbes(record, probeFilter)
+		record = filterTelemetryHistoryRecord(record, filter)
 		if historyRecordInWindow(record, from, to) {
 			volatile = append(volatile, record)
 		}
@@ -1555,35 +1784,62 @@ func (h *telemetryHistory) queryRecordsWithFilterContext(ctx context.Context, t 
 	if h.dir != "" && diskLimit > 0 {
 		p, err := h.nodeFile(t, nodeID)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		disk, err := readHistoryJSONLTail(ctx, p, from, to, diskLimit, h.fileByteLimit(), probeFilter)
+		if h.beforeDiskRead != nil {
+			h.beforeDiskRead()
+		}
+		disk, err := readHistoryJSONLTail(ctx, p, from, to, diskLimit, h.fileByteLimit(), filter)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		out = disk
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return append(out, volatile...), nil
-}
-
-func filterTelemetryHistoryRecordProbes(record telemetryHistoryRecord, filter telemetryHistoryProbeFilter) telemetryHistoryRecord {
-	if filter.all {
-		return record
-	}
-	if filter.seriesID == "" || len(record.ProbeAttempts) == 0 {
-		record.ProbeAttempts = nil
-		return record
-	}
-	filtered := make([]ProbeHistorySample, 0, 1)
-	for _, sample := range record.ProbeAttempts {
-		if sample.SeriesID == filter.seriesID {
-			filtered = append(filtered, sample)
+	// If an in-flight batch became durable (or was cleared/requeued) after the volatile snapshot,
+	// diskLimit may have counted one physical copy as a distinct logical suffix. Retry instead of
+	// publishing a transiently shortened chart. A later transition starts a new linearization point.
+	h.mu.Lock()
+	currentFlushEpoch := uint64(0)
+	if byNode := h.nodes[t]; byNode != nil {
+		if e := byNode[nodeID]; e != nil {
+			currentFlushEpoch = e.flushEpoch
 		}
 	}
-	record.ProbeAttempts = filtered
+	h.mu.Unlock()
+	// setCap publishes through capMu before it can take history.mu to advance flushEpoch. Requiring
+	// the exact cap as well closes the small window where this query read the old cap, then snapped
+	// the new epoch after trimming and would otherwise mistake that mixed policy for a stable view.
+	return append(out, volatile...), currentFlushEpoch == snapshotFlushEpoch && h.capFor(t) == cap, nil
+}
+
+func filterTelemetryHistoryRecord(record telemetryHistoryRecord, filter telemetryHistoryFilter) telemetryHistoryRecord {
+	if !filter.allProbes {
+		if filter.probeSeriesID == "" || len(record.ProbeAttempts) == 0 {
+			record.ProbeAttempts = nil
+		} else {
+			filtered := make([]ProbeHistorySample, 0, 1)
+			for _, sample := range record.ProbeAttempts {
+				if sample.SeriesID == filter.probeSeriesID {
+					filtered = append(filtered, sample)
+				}
+			}
+			record.ProbeAttempts = filtered
+		}
+	}
+	if filter.deviceSeriesID == "" || len(record.DeviceSamples) == 0 {
+		record.DeviceSamples = nil
+	} else {
+		filtered := make([]DeviceHistorySample, 0, 1)
+		for _, sample := range record.DeviceSamples {
+			if sample.SeriesID == filter.deviceSeriesID {
+				filtered = append(filtered, sample)
+			}
+		}
+		record.DeviceSamples = filtered
+	}
 	return record
 }
 
@@ -1600,6 +1856,11 @@ func historyRecordInWindow(record telemetryHistoryRecord, from, to time.Time) bo
 	}
 	for _, sample := range record.ProbeAttempts {
 		if inWindow(sample.CheckedAt, from, to) {
+			return true
+		}
+	}
+	for _, sample := range record.DeviceSamples {
+		if inWindow(sample.TS, from, to) {
 			return true
 		}
 	}
@@ -1659,16 +1920,19 @@ func sortAndDedupeResourceSamples(samples []ResourceSample) []ResourceSample {
 }
 
 type probeHistoryIdentity struct {
-	id        string
-	typeName  string
-	host      string
-	port      int
-	checkedAt int64
+	id             string
+	typeName       string
+	host           string
+	port           int
+	url            string
+	expectedStatus int
+	checkedAt      int64
 }
 
 func probeHistorySampleIdentity(sample ProbeHistorySample) probeHistoryIdentity {
 	return probeHistoryIdentity{
 		id: sample.ID, typeName: sample.Type, host: sample.Host, port: sample.Port,
+		url: sample.URL, expectedStatus: sample.ExpectedStatus,
 		checkedAt: sample.CheckedAt.UnixNano(),
 	}
 }
@@ -1703,6 +1967,57 @@ func dedupeProbeHistorySamples(samples []ProbeHistorySample) []ProbeHistorySampl
 	return out
 }
 
+// sortAndDedupeDeviceHistorySamples removes only exact disk/inflight duplicates. Distinct readings at
+// the same timestamp remain independent observations, matching the resource-history contract.
+func sortAndDedupeDeviceHistorySamples(samples []DeviceHistorySample) []DeviceHistorySample {
+	if len(samples) == 0 {
+		return nil
+	}
+	sort.SliceStable(samples, func(i, j int) bool {
+		if samples[i].TS.Equal(samples[j].TS) {
+			return samples[i].SeriesID < samples[j].SeriesID
+		}
+		return samples[i].TS.Before(samples[j].TS)
+	})
+	out := samples[:0]
+	seenAtTimestamp := make(map[string][]int)
+	var timestamp time.Time
+	haveTimestamp := false
+	for _, sample := range samples {
+		if !haveTimestamp || !sample.TS.Equal(timestamp) {
+			clear(seenAtTimestamp)
+			timestamp = sample.TS
+			haveTimestamp = true
+		}
+		duplicate := false
+		for _, index := range seenAtTimestamp[sample.SeriesID] {
+			if equalDeviceHistoryValues(out[index].Values, sample.Values) {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		seenAtTimestamp[sample.SeriesID] = append(seenAtTimestamp[sample.SeriesID], len(out))
+		out = append(out, sample)
+	}
+	return out
+}
+
+func equalDeviceHistoryValues(a, b map[devicemetric.NumericKey]float64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, value := range a {
+		other, ok := b[key]
+		if !ok || math.Float64bits(value) != math.Float64bits(other) {
+			return false
+		}
+	}
+	return true
+}
+
 func inWindow(ts, from, to time.Time) bool {
 	return !ts.Before(from) && !ts.After(to)
 }
@@ -1710,8 +2025,9 @@ func inWindow(ts, from, to time.Time) bool {
 // readHistoryJSONLTail reads only the newest bounded append-order suffix, then filters that suffix by
 // the requested time window. A missing file is empty; corrupt lines are skipped (best-effort
 // observability). Both the record cap and physical byte budget are applied before JSON decoding, so a
-// wide/slack file cannot turn a small query into a full-file parse.
-func readHistoryJSONLTail(ctx context.Context, p string, from, to time.Time, maxRecords int, maxBytes int64, probeFilter telemetryHistoryProbeFilter) ([]telemetryHistoryRecord, error) {
+// wide/slack file cannot turn a small query into a full-file parse. Device selection is pushed into the
+// line decoder: non-selected rows remain raw JSON and never allocate their numeric maps.
+func readHistoryJSONLTail(ctx context.Context, p string, from, to time.Time, maxRecords int, maxBytes int64, filter telemetryHistoryFilter) ([]telemetryHistoryRecord, error) {
 	f, err := openTelemetryHistoryFile(p)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -1734,11 +2050,10 @@ func readHistoryJSONLTail(ctx context.Context, p string, from, to time.Time, max
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		var record telemetryHistoryRecord
-		if json.Unmarshal(sc.Bytes(), &record) != nil {
+		record, err := decodeTelemetryHistoryRecordForFilter(sc.Bytes(), filter)
+		if err != nil {
 			continue
 		}
-		record = filterTelemetryHistoryRecordProbes(record, probeFilter)
 		if historyRecordInWindow(record, from, to) {
 			out = append(out, record)
 		}
@@ -1750,6 +2065,61 @@ func readHistoryJSONLTail(ctx context.Context, p string, from, to time.Time, max
 		return nil, err
 	}
 	return out, nil
+}
+
+func decodeTelemetryHistoryRecordForFilter(data []byte, filter telemetryHistoryFilter) (telemetryHistoryRecord, error) {
+	var wire telemetryHistoryRecordScanJSON
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return telemetryHistoryRecord{}, err
+	}
+	record := telemetryHistoryRecord{}
+	if wire.TS != nil && !wire.TS.IsZero() {
+		record.Resource = &ResourceSample{
+			TS: wire.TS.UTC(), IntervalMS: wire.IntervalMS, CpuPct: wire.CpuPct,
+			Load1: wire.Load1, Load5: wire.Load5, Load15: wire.Load15,
+			MemTotalKB: wire.MemTotalKB, MemAvailKB: wire.MemAvailKB,
+		}
+		record.RecordedAt = wire.TS.UTC()
+	} else if wire.RecordedAt != nil {
+		record.RecordedAt = wire.RecordedAt.UTC()
+	}
+	for _, sample := range wire.ProbeAttempts {
+		if validStoredProbeHistorySample(sample) {
+			record.ProbeAttempts = append(record.ProbeAttempts, sample)
+		}
+	}
+	if len(record.ProbeAttempts) > 1 {
+		record.ProbeAttempts = dedupeProbeHistorySamples(record.ProbeAttempts)
+	}
+	if over := len(record.ProbeAttempts) - maxProbeHistoryAttemptsPerRecord; over > 0 {
+		record.ProbeAttempts = record.ProbeAttempts[over:]
+	}
+
+	if filter.deviceSeriesID != "" && len(wire.DeviceSamples) > 0 && !bytes.Equal(bytes.TrimSpace(wire.DeviceSamples), []byte("null")) {
+		decoder := json.NewDecoder(bytes.NewReader(wire.DeviceSamples))
+		token, err := decoder.Token()
+		if err == nil && token == json.Delim('[') {
+			for decoder.More() {
+				var raw json.RawMessage
+				if err := decoder.Decode(&raw); err != nil {
+					break
+				}
+				var identity struct {
+					SeriesID string `json:"series_id"`
+				}
+				if json.Unmarshal(raw, &identity) != nil || identity.SeriesID != filter.deviceSeriesID {
+					continue
+				}
+				var sample DeviceHistorySample
+				if json.Unmarshal(raw, &sample) == nil && validStoredDeviceHistorySample(sample) {
+					sample.TS = sample.TS.UTC()
+					record.DeviceSamples = append(record.DeviceSamples, cloneDeviceHistorySample(sample))
+				}
+				break // the producer contract permits at most one row per exact series in a record
+			}
+		}
+	}
+	return filterTelemetryHistoryRecord(record, filter), nil
 }
 
 func openTelemetryHistoryFile(p string) (*os.File, error) {

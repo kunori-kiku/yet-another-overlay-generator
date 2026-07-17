@@ -204,26 +204,14 @@ func run(cfg *Config, heldStateLease *stateLease) (*RunResult, error) {
 	}
 	res.Verify = vr
 
-	// Active probes are outbound network authority, so telemetry.json is inert unless it is both
-	// part of the verified bundle and covered by the off-host keystone. Parse it before any root
-	// action; only recordSuccess can atomically replace the last-known-good active policy.
-	var candidateTelemetryPolicy json.RawMessage
-	if raw, ok := files[probepolicy.FileName]; ok {
-		if len(cfg.OperatorCredPEM) == 0 {
-			err := fmt.Errorf("active telemetry policy requires a configured off-host operator credential")
-			recordFailure(cfg, prev, err.Error())
-			return res, fmt.Errorf("agent: %w", err)
-		}
-		policy, err := probepolicy.Parse(raw)
-		if err != nil {
-			recordFailure(cfg, prev, fmt.Sprintf("telemetry policy invalid: %v", err))
-			return res, fmt.Errorf("agent: telemetry policy: %w", err)
-		}
-		candidateTelemetryPolicy, err = probepolicy.Marshal(policy.Probes)
-		if err != nil {
-			recordFailure(cfg, prev, fmt.Sprintf("telemetry policy canonicalization failed: %v", err))
-			return res, fmt.Errorf("agent: telemetry policy canonicalization: %w", err)
-		}
+	// Active telemetry is outbound/system-observation authority, so either policy filename is inert
+	// unless it is verified and covered by the off-host keystone. Parse and canonicalize the one
+	// candidate before membership, self-update, staging, PendingApply, or any root action; only
+	// recordSuccess can atomically replace the last-known-good durable policy.
+	candidatePolicy, err := candidateTelemetryPolicy(files, len(cfg.OperatorCredPEM) > 0)
+	if err != nil {
+		recordFailure(cfg, prev, fmt.Sprintf("telemetry policy invalid: %v", err))
+		return res, fmt.Errorf("agent: telemetry policy: %w", err)
 	}
 
 	// 2b. membership keystone (fail-closed, AFTER tier-1 integrity, BEFORE apply).
@@ -331,9 +319,9 @@ func run(cfg *Config, heldStateLease *stateLease) (*RunResult, error) {
 	// clearing PendingApply in one durable replacement. A failure leaves the earlier
 	// intent as the conservative recovery floor and is returned loudly.
 	if action == LastActionUninstall {
-		candidateTelemetryPolicy = nil
+		candidatePolicy = nil
 	}
-	if err := recordSuccess(cfg, intentState, man, vr, membershipEpoch, candidateTelemetryPolicy); err != nil {
+	if err := recordSuccess(cfg, intentState, man, vr, membershipEpoch, candidatePolicy); err != nil {
 		return res, fmt.Errorf("agent: install.sh completed but anti-rollback state is not durable: %w", err)
 	}
 
@@ -356,6 +344,44 @@ func run(cfg *Config, heldStateLease *stateLease) (*RunResult, error) {
 		}
 	}
 	return res, nil
+}
+
+// candidateTelemetryPolicy returns the canonical bytes that may replace the one durable
+// last-known-good policy after a fully successful apply. It is deliberately pure and runs before
+// membership/self-update/staging: malformed, dual-file, or uncredentialed policy never reaches a
+// root-side mutation. A signed omission returns nil and clears policy only after success.
+func candidateTelemetryPolicy(files map[string][]byte, operatorCredentialConfigured bool) (json.RawMessage, error) {
+	legacy, hasLegacy := files[probepolicy.FileName]
+	successor, hasSuccessor := files[probepolicy.SuccessorFileName]
+	if hasLegacy && hasSuccessor {
+		return nil, fmt.Errorf("bundle contains both %s and %s", probepolicy.FileName, probepolicy.SuccessorFileName)
+	}
+	if !hasLegacy && !hasSuccessor {
+		return nil, nil
+	}
+	if !operatorCredentialConfigured {
+		return nil, fmt.Errorf("active telemetry policy requires a configured off-host operator credential")
+	}
+	if hasLegacy {
+		policy, err := probepolicy.Parse(legacy)
+		if err != nil {
+			return nil, err
+		}
+		canonical, err := probepolicy.Marshal(policy.Probes)
+		if err != nil {
+			return nil, fmt.Errorf("canonicalize %s: %w", probepolicy.FileName, err)
+		}
+		return json.RawMessage(canonical), nil
+	}
+	policy, err := probepolicy.ParseSuccessor(successor)
+	if err != nil {
+		return nil, err
+	}
+	canonical, err := probepolicy.MarshalSuccessor(*policy)
+	if err != nil {
+		return nil, fmt.Errorf("canonicalize %s: %w", probepolicy.SuccessorFileName, err)
+	}
+	return json.RawMessage(canonical), nil
 }
 
 // recordSelfUpdateBlocked persists the curated reason a post-apply self-update was deferred, so the

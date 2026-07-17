@@ -41,20 +41,26 @@ function stubFetch(sessionBody: unknown | null) {
 }
 
 beforeEach(() => {
-  useControllerStore.setState({ mode: 'controller', controllerVersion: '' });
+  useControllerStore.setState({ mode: 'controller', controllerVersion: '', controllerCapabilities: [] });
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  useControllerStore.setState({ mode: 'local', controllerVersion: '', loggedIn: false });
+  useControllerStore.setState({
+    mode: 'local', controllerVersion: '', controllerCapabilities: [], loggedIn: false,
+  });
 });
 
 describe('controllerVersion plumbing (plan-8)', () => {
   it('checkSession captures controller_version from an authed /session probe', async () => {
-    stubFetch({ operator: 'breakglass', expires_at: '', csrf_token: '', controller_version: 'v2.0.0-beta.9' });
+    stubFetch({
+      operator: 'breakglass', expires_at: '', csrf_token: '', controller_version: 'v2.0.0-beta.9',
+      controller_capabilities: ['telemetry-policy-v2-topology'],
+    });
     await useControllerStore.getState().checkSession();
     // Break-glass (empty csrf) is authed but not a login: version retained, loggedIn stays false.
     expect(useControllerStore.getState().controllerVersion).toBe('v2.0.0-beta.9');
+    expect(useControllerStore.getState().controllerCapabilities).toEqual(['telemetry-policy-v2-topology']);
     expect(useControllerStore.getState().loggedIn).toBe(false);
   });
 
@@ -73,19 +79,26 @@ describe('controllerVersion plumbing (plan-8)', () => {
     stubFetch({ operator: 'breakglass', expires_at: '', csrf_token: '' });
     await useControllerStore.getState().checkSession();
     expect(useControllerStore.getState().controllerVersion).toBe('');
+    expect(useControllerStore.getState().controllerCapabilities).toEqual([]);
   });
 
   it('checkSession clears a stale controllerVersion on a logged-out (401) probe', async () => {
-    useControllerStore.setState({ controllerVersion: 'v2.0.0-beta.9' });
+    useControllerStore.setState({
+      controllerVersion: 'v2.0.0-beta.9', controllerCapabilities: ['telemetry-policy-v2-topology'],
+    });
     stubFetch(null); // 401 → getSession returns null → genuine session loss
     await useControllerStore.getState().checkSession();
     expect(useControllerStore.getState().controllerVersion).toBe('');
+    expect(useControllerStore.getState().controllerCapabilities).toEqual([]);
   });
 
   it('logout clears controllerVersion', async () => {
-    useControllerStore.setState({ controllerVersion: 'v2.0.0-beta.9', loggedIn: true });
+    useControllerStore.setState({
+      controllerVersion: 'v2.0.0-beta.9', controllerCapabilities: ['telemetry-policy-v2-topology'], loggedIn: true,
+    });
     stubFetch({ operator: 'x', expires_at: '', csrf_token: '' }); // logout best-effort POSTs; tolerated
     await useControllerStore.getState().logout();
     expect(useControllerStore.getState().controllerVersion).toBe('');
+    expect(useControllerStore.getState().controllerCapabilities).toEqual([]);
   });
 });

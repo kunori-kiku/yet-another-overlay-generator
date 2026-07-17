@@ -5,7 +5,12 @@
 
 import type { ControllerSet, ControllerGet } from './types';
 import type { Topology } from '../../types/topology';
-import type { DeployForceArg } from '../../lib/deployPreview';
+import {
+  requiresSuccessorTelemetryPolicy,
+  successorTelemetryPolicyFingerprint,
+  type DeployForceArg,
+  type TelemetryPolicyDeployMode,
+} from '../../lib/deployPreview';
 import {
   captureControllerActionContext,
   controllerActionContextIsCurrent,
@@ -14,8 +19,11 @@ import {
   canonicalDesign,
   sameIdSet,
   selectHasLocalSigningKey,
+  assertControllerCanWriteTopology,
 } from './helpers';
 import {
+  ControllerError,
+  controllerErrorCode,
   compilePreview as ctlCompilePreview,
   deployPreview as ctlDeployPreview,
   stage,
@@ -53,7 +61,9 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
     lastDeploy: null,
     deployPreview: null,
     deployPreviewing: false,
+    deployPreviewMode: 'normal' as const,
     deployPreviewError: null,
+    telemetryPolicyUpgradeOffer: null,
     lastStrippedKeys: 0,
     pendingShrink: null,
     previewing: false,
@@ -100,12 +110,20 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
     // openDeployPreview (plan-6): fetch the read-only dry-run and open the confirmation dialog.
     // Guarded so a re-click while previewing / deploying / dialog-open does not re-fetch. Live-only:
     // deployPreview is never persisted (see the partialize note).
-    openDeployPreview: async () => {
+    openDeployPreview: async (mode: TelemetryPolicyDeployMode = 'normal') => {
       if (get().deployPreviewing || get().loading || get().deployPreview) return;
       const context = captureControllerActionContext(get);
       // Clear any prior preview-error banner so a retry starts clean (do NOT guard on it — the
       // Deploy button must be able to re-attempt the preview after a failure).
-      set({ deployPreviewing: true, error: null, deployPreviewError: null });
+      set({
+        deployPreviewing: true,
+        deployPreviewMode: mode,
+        error: null,
+        deployPreviewError: null,
+        telemetryPolicyUpgradeOffer: null,
+      });
+      let successorPolicyRequired = false;
+      let successorFingerprint = '';
       try {
         // Preview EXACTLY the canvas a Deploy will push+stage: deploy() reads the same
         // getTopology(), strips private keys, then update-topology's it before staging — so we POST
@@ -115,20 +133,54 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
         // compilePreview / deploy()).
         const current = useTopologyStore.getState().getTopology();
         const { topo: clean } = stripPrivateKeys(current);
-        const preview = await ctlDeployPreview(context.config, JSON.stringify(clean));
+        successorPolicyRequired = requiresSuccessorTelemetryPolicy(clean);
+        successorFingerprint = successorTelemetryPolicyFingerprint(clean);
+        const preview = await ctlDeployPreview(context.config, JSON.stringify(clean), mode);
         if (!controllerActionContextIsCurrent(get, context)) return;
-        set({ deployPreview: preview, deployPreviewing: false });
+        set({ deployPreview: preview, deployPreviewMode: mode, deployPreviewing: false });
       } catch (err) {
         if (!controllerActionContextIsCurrent(get, context)) return;
-        // Best-effort (plan-6): the preview endpoint may be unavailable (a newer panel POSTs the
-        // deploy-preview route to an OLDER controller — 405 GET-only / 404 no route). Record the
-        // failure in deployPreviewError (NOT the global `error`) so the DeployBar surfaces it beside
-        // a "Deploy anyway" fallback, rather than leaving Deploy permanently dead.
-        set({ deployPreviewError: localizeError(err, 'error.generic'), deployPreviewing: false });
+        const localized = localizeError(err, 'error.generic');
+        if (mode === 'normal' && controllerErrorCode(err) === 'telemetry_policy_upgrade_required') {
+          set({
+            error: null,
+            telemetryPolicyUpgradeOffer: { error: localized, fingerprint: successorFingerprint },
+            deployPreviewError: null,
+            deployPreviewing: false,
+          });
+          return;
+        }
+        // Compatibility fallback only: an older controller may genuinely lack the POST preview
+        // route (404/405). Validation, security, storage, export, and network failures are blocking;
+        // bypassing their preview would merely repeat the same failure during stage or risk hiding a
+        // real controller fault.
+        if (mode === 'normal' && err instanceof ControllerError && (err.status === 404 || err.status === 405)) {
+          if (successorPolicyRequired) {
+            set({
+              error: tLocal('controllerStore.successorTelemetryRequiresNewController'),
+              deployPreviewError: null,
+              deployPreviewing: false,
+            });
+            return;
+          }
+          set({ deployPreviewError: localized, deployPreviewing: false });
+          return;
+        }
+        set({
+          error: localized,
+          telemetryPolicyUpgradeOffer: null,
+          deployPreviewError: null,
+          deployPreviewing: false,
+        });
       }
     },
 
-    cancelDeployPreview: () => set({ deployPreview: null, deployPreviewError: null }),
+    cancelDeployPreview: () => set({
+      deployPreview: null,
+      deployPreviewMode: 'normal',
+      deployPreviewError: null,
+      telemetryPolicyUpgradeOffer: null,
+    }),
 
     // forceRedeployNode (plan-6): re-stage ONE node even if unchanged, then the usual promote path.
     // It reuses deploy() with force_nodes:[nodeId] (so the keystone sign step is not reimplemented);
@@ -137,7 +189,12 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
       await get().deploy({ force: { forceNodes: [nodeId] } });
     },
 
-    deploy: async (opts?: { confirmedShrink?: boolean; force?: DeployForceArg }) => {
+    deploy: async (opts?: {
+      confirmedShrink?: boolean;
+      force?: DeployForceArg;
+      telemetryPolicyMode?: TelemetryPolicyDeployMode;
+      legacyPreviewFallback?: boolean;
+    }) => {
       // Idempotency guard (plan-16 / 3.4): a deploy is a multi-request fleet mutation
       // (update-topology → stage → sign → promote). The Deploy button is disabled while
       // loading, but a re-entrant programmatic/synthetic invocation would otherwise re-enter and
@@ -148,7 +205,13 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
       const context = captureControllerActionContext(get);
       // Clear the preview-error banner too: a deploy (whether from the dialog Confirm or the
       // "Deploy anyway" fallback) supersedes any stale preview-fetch failure.
-      set({ loading: true, error: null, deployPreviewError: null });
+      set({
+        loading: true,
+        error: null,
+        deployPreviewError: null,
+        telemetryPolicyUpgradeOffer: null,
+      });
+      let attemptedTopology: Topology | null = null;
       try {
         // Resolve the design to upload + its stripped-key count. On a confirmed
         // shrink we deploy the SNAPSHOT the warning was computed from (binds the
@@ -159,13 +222,16 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
         // Force (plan-6): from opts on a fresh deploy, or carried in pendingShrink on a
         // confirmed-shrink continuation so the force the operator chose survives the shrink gate.
         let force: DeployForceArg | undefined;
+        let telemetryPolicyMode: TelemetryPolicyDeployMode;
         const confirming = opts?.confirmedShrink ? get().pendingShrink : null;
         if (confirming) {
           cleanTopo = confirming.snapshot;
           stripped = confirming.stripped;
           force = confirming.force;
+          telemetryPolicyMode = confirming.telemetryPolicyMode;
         } else {
           force = opts?.force;
+          telemetryPolicyMode = opts?.telemetryPolicyMode ?? 'normal';
           // Custody strip (plan-5, D4): never send a private key to the server (the
           // client mirror of the server's update-topology 400). In controller mode
           // the hydrated design is already key-free, but a locally-compiled/imported
@@ -174,6 +240,9 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
           const r = stripPrivateKeys(local);
           cleanTopo = r.topo;
           stripped = r.stripped;
+          if (opts?.legacyPreviewFallback && requiresSuccessorTelemetryPolicy(cleanTopo)) {
+            throw new Error(tLocal('controllerStore.successorTelemetryRequiresNewController'));
+          }
 
           // Shrink/empty guard (plan-5): before mutating the server design, compare
           // the canvas against the server copy. Emptying it, or dropping ≥50% of the
@@ -209,6 +278,7 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
                   snapshot: cleanTopo,
                   stripped,
                   force,
+                  telemetryPolicyMode,
                 },
                 // Close the preview dialog: the typed-confirm shrink modal now takes over (both
                 // render in DeployBar; the shrink gate is the stricter of the two).
@@ -220,6 +290,9 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
           }
         }
 
+        attemptedTopology = cleanTopo;
+        await assertControllerCanWriteTopology(cleanTopo, context.config);
+        if (!controllerActionContextIsCurrent(get, context)) return;
         const topoJSON = JSON.stringify(cleanTopo);
         await updateTopology(context.config, topoJSON);
         if (!controllerActionContextIsCurrent(get, context)) return;
@@ -250,7 +323,7 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
         // design once stage's allocation has been read back (and is the fallback baseline
         // if that read fails).
         set({ lastSyncedSnapshot: canonicalDesign(cleanTopo), lastSyncedTopology: cleanTopo });
-        const result = await stage(context.config, force);
+        const result = await stage(context.config, force, telemetryPolicyMode);
         if (!controllerActionContextIsCurrent(get, context)) return;
         // When there are no enrolled nodes, stage produces no bundle (staged is empty), and
         // promote would then return 409 ErrNoStagedBundle — that is not an error but "no node
@@ -360,6 +433,8 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
           loading: false,
           pendingShrink: null,
           deployPreview: null,
+          deployPreviewMode: 'normal',
+          telemetryPolicyUpgradeOffer: null,
           lastStrippedKeys: stripped,
         });
         await get().refresh();
@@ -373,14 +448,21 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
         // pendingShrink) stuck open over the error. Clearing it surfaces the
         // error in the deploy bar and lets the operator retry Deploy, which
         // re-evaluates the shrink guard against the current server state.
+        const readinessBlocked = controllerErrorCode(err) === 'telemetry_policy_upgrade_required';
+        const localized = localizeError(err, 'error.generic');
+        const offerTopology = attemptedTopology ?? stripPrivateKeys(useTopologyStore.getState().getTopology()).topo;
         set({
-          error: localizeError(err, 'error.generic'),
+          error: readinessBlocked ? null : localized,
           loading: false,
           signing: false,
           pendingShrink: null,
+          telemetryPolicyUpgradeOffer: readinessBlocked
+            ? { error: localized, fingerprint: successorTelemetryPolicyFingerprint(offerTopology) }
+            : null,
           // Close the preview dialog on failure too, so the error surfaces in the DeployBar
           // (unoccluded by the modal) and the operator can retry Deploy, which re-previews.
           deployPreview: null,
+          deployPreviewMode: 'normal',
         });
       }
     },

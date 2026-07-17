@@ -197,7 +197,8 @@ func verifyAsNode(files map[string][]byte, nodeID string, pinPEM []byte, prevEpo
 	}, prevEpoch)
 }
 
-// twoNodeTopo is a router + peer (no client — avoids the client-edge port-pin re-stage quirk).
+// twoNodeTopo is a compact router + peer fixture that keeps the keystone scenarios focused on
+// signing, membership, and rollback behavior.
 func twoNodeTopo() *model.Topology {
 	return &model.Topology{
 		Project: model.Project{ID: "reg-001", Name: "Regression"},

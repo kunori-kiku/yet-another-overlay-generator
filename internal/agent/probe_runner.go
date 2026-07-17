@@ -36,6 +36,7 @@ const (
 	probeFailureConnectionRefused  = probemetric.FailureConnectionRefused
 	probeFailureNetworkUnreachable = probemetric.FailureNetworkUnreachable
 	probeFailureNetworkError       = probemetric.FailureNetworkError
+	probeFailureUnexpectedStatus   = probemetric.FailureUnexpectedStatus
 	maxConcurrentProbes            = 4
 	maxResolvedAddresses           = 8
 )
@@ -44,7 +45,13 @@ const (
 // making probemetric.Result the single agent/controller wire contract.
 type activeProbeResult = probemetric.Result
 
-type probeAttemptFunc func(context.Context, model.TelemetryProbe) string
+type probeAttemptOutcome struct {
+	FailureReason    string
+	ResponseComplete bool
+	ActualStatus     int
+}
+
+type probeAttemptFunc func(context.Context, model.TelemetryProbe) probeAttemptOutcome
 
 type probeRuntime struct {
 	probe    model.TelemetryProbe
@@ -122,7 +129,7 @@ func (s *activeProbeSampler) Sample(_ time.Time) ([]runtimecontract.Condition, m
 		s.clear()
 		return nil, nil
 	}
-	policy, err := probepolicy.Parse(state.ActiveTelemetryPolicy)
+	policy, err := probepolicy.ParseActive(state.ActiveTelemetryPolicy)
 	if err != nil {
 		// Corrupt or hand-edited state is not an authorization source. Cancel active work and fail
 		// closed until a future verified apply commits a valid replacement.
@@ -279,7 +286,7 @@ func (s *activeProbeSampler) execute(runtimeCtx context.Context, runtime *probeR
 		s.mu.Unlock()
 
 		started := s.monotonicNow()
-		failureReason := performProbeAttemptSafely(s.attempt, attemptCtx, runtime.probe)
+		outcome := performProbeAttemptSafely(s.attempt, attemptCtx, runtime.probe)
 		finished := s.monotonicNow()
 		checkedAt := s.checkedAtNow().UTC()
 		cancelAttempt()
@@ -293,12 +300,16 @@ func (s *activeProbeSampler) execute(runtimeCtx context.Context, runtime *probeR
 		}
 		result := configuredProbeResult(runtime.probe, probeStatusSuccess)
 		result.CheckedAt = checkedAt.Format(time.RFC3339Nano)
-		if failureReason == "" {
+		if outcome.FailureReason == "" || outcome.ResponseComplete {
 			ms := probeLatencyMilliseconds(started, finished)
 			result.LatencyMS = &ms
-		} else {
+		}
+		if runtime.probe.Type == model.TelemetryProbeURL && outcome.ResponseComplete {
+			result.ActualStatus = outcome.ActualStatus
+		}
+		if outcome.FailureReason != "" {
 			result.Status = probeStatusFailure
-			result.FailureReason = failureReason
+			result.FailureReason = outcome.FailureReason
 		}
 
 		s.mu.Lock()
@@ -325,13 +336,13 @@ func (s *activeProbeSampler) execute(runtimeCtx context.Context, runtime *probeR
 	}
 }
 
-func performProbeAttemptSafely(attempt probeAttemptFunc, ctx context.Context, probe model.TelemetryProbe) (failureReason string) {
+func performProbeAttemptSafely(attempt probeAttemptFunc, ctx context.Context, probe model.TelemetryProbe) (outcome probeAttemptOutcome) {
 	defer func() {
 		if recover() != nil {
 			// A sampler panic is already isolated by the telemetry framework, but active attempts run on
 			// their own cadence goroutine. Preserve the same daemon-liveness invariant here and expose only
 			// the closed, non-sensitive failure category.
-			failureReason = probeFailureNetworkError
+			outcome = probeAttemptOutcome{FailureReason: probeFailureNetworkError}
 		}
 	}()
 	return attempt(ctx, probe)
@@ -371,7 +382,15 @@ func waitProbeDelay(ctx context.Context, delay time.Duration) bool {
 }
 
 func configuredProbeResult(probe model.TelemetryProbe, status string) activeProbeResult {
-	return activeProbeResult{ID: probe.ID, Type: probe.Type, Host: probe.Host, Port: probe.Port, Status: status}
+	result := activeProbeResult{ID: probe.ID, Type: probe.Type, Status: status}
+	if probe.Type == model.TelemetryProbeURL {
+		result.URL = probe.URL
+		result.ExpectedStatus = probepolicy.EffectiveExpectedStatus(probe)
+	} else {
+		result.Host = probe.Host
+		result.Port = probe.Port
+	}
+	return result
 }
 
 func (s *activeProbeSampler) appendCompletedSampleLocked(sample activeProbeResult) bool {
@@ -393,7 +412,13 @@ func (s *activeProbeSampler) appendCompletedSampleLocked(sample activeProbeResul
 }
 
 func probeResultMatchesProbe(result activeProbeResult, probe model.TelemetryProbe) bool {
-	return result.ID == probe.ID && result.Type == probe.Type && result.Host == probe.Host && result.Port == probe.Port
+	if result.ID != probe.ID || result.Type != probe.Type {
+		return false
+	}
+	if probe.Type == model.TelemetryProbeURL {
+		return result.URL == probe.URL && result.ExpectedStatus == probepolicy.EffectiveExpectedStatus(probe)
+	}
+	return result.Host == probe.Host && result.Port == probe.Port
 }
 
 // startupProbeJitter spreads a newly activated policy over at most five seconds. Including the
@@ -408,14 +433,21 @@ func startupProbeJitter(nodeID string, probe model.TelemetryProbe) time.Duration
 	if maxJitter <= 0 {
 		return 0
 	}
-	sum := sha256.Sum256([]byte(nodeID + "\x00" + probe.ID + "\x00" + probe.Type + "\x00" + probe.Host + "\x00" + strconv.Itoa(probe.Port)))
+	destination := probe.Host + "\x00" + strconv.Itoa(probe.Port)
+	if probe.Type == model.TelemetryProbeURL {
+		destination = probe.URL + "\x00" + strconv.Itoa(probepolicy.EffectiveExpectedStatus(probe))
+	}
+	sum := sha256.Sum256([]byte(nodeID + "\x00" + probe.ID + "\x00" + probe.Type + "\x00" + destination))
 	n := binary.BigEndian.Uint32(sum[:4])
 	return time.Duration(uint64(n) % uint64(maxJitter+1))
 }
 
-func performProbeAttempt(ctx context.Context, probe model.TelemetryProbe) string {
+func performProbeAttempt(ctx context.Context, probe model.TelemetryProbe) probeAttemptOutcome {
+	if probe.Type == model.TelemetryProbeURL {
+		return performURLProbeAttempt(ctx, probe)
+	}
 	addresses, err := resolveProbeHost(ctx, probe.Host)
-	return performResolvedProbeAttempt(ctx, probe, addresses, err)
+	return probeAttemptOutcome{FailureReason: performResolvedProbeAttempt(ctx, probe, addresses, err)}
 }
 
 func performResolvedProbeAttempt(ctx context.Context, probe model.TelemetryProbe, addresses []net.IP, resolveErr error) string {

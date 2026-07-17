@@ -168,10 +168,8 @@ it on every enabled edge that has a non-empty `endpoint_host`:
 
 `compiled_port` MUST equal the port carried in the rendered `Endpoint`. The two MUST NOT diverge.
 
-> **Compliance:** the write-back currently sets `compiled_port` to the allocated remote listen
-> port unconditionally and never reflects an `endpoint_port` override
-> (internal/compiler/compiler.go:111-126), so for an overridden edge the UI shows a port that
-> differs from the rendered `Endpoint`. Closed by Plan 2 (PR #4).
+> **Compliance:** compiler write-back selects the explicit `endpoint_port` when present and the
+> allocated remote listen port otherwise, matching the rendered `Endpoint` in both cases.
 
 ## Field contract
 
@@ -180,7 +178,7 @@ it on every enabled edge that has a non-empty `endpoint_host`:
 | `id`, `from_node_id`, `to_node_id`, `type` | frontend | FE → BE | preserved unchanged |
 | `endpoint_host` | operator (via frontend) | FE → BE | preserved; frontend MAY auto-stamp from `public_endpoints[0].host` |
 | `endpoint_port` | operator (via frontend) | FE → BE | explicit override only; frontend MUST NOT auto-stamp; `0`/absent ⇒ auto |
-| `compiled_port` | compiler | BE → FE | read-only output; never sent back as input |
+| `compiled_port` | compiler | BE ↔ FE | round-tripped as compiler-owned output, but never interpreted as operator input or sticky allocation authority |
 | `link_direction` | operator (via frontend) | FE → BE | preserved unchanged; empty ≡ `both`; panel sanitizes out-of-enum to absent on load |
 | `priority`, `weight`, `transport`, `is_enabled`, `notes` | frontend | FE → BE | preserved unchanged |
 | `pinned_*` | compiler (write) + frontend (persist) | BE ↔ FE | round-tripped verbatim (see below) |
@@ -188,9 +186,9 @@ it on every enabled edge that has a non-empty `endpoint_host`:
 ## Allocation pins
 
 To make incremental growth non-disruptive, the compiler binds each link's allocated resources to
-the edge via six read-write pin fields, written by the compiler and round-tripped by the frontend
-(the same write-back + localStorage persistence path already used for `overlay_ip` and
-`compiled_port`):
+the edge via six read-write pin fields, written by the compiler and round-tripped by the frontend.
+`compiled_port` is separate read-only output: it echoes the effective remote dial port and is not a
+sticky allocation authority.
 
 | Field | Pins |
 |---|---|
@@ -201,17 +199,16 @@ the edge via six read-write pin fields, written by the compiler and round-trippe
 | `pinned_from_link_local` | from-side IPv6 link-local |
 | `pinned_to_link_local` | to-side IPv6 link-local |
 
-**Round-trip rule.** On compile the backend MUST stamp these fields with the allocated values.
-The frontend MUST persist them and send them back unchanged on the next compile. A subsequent
-compile MUST honor a present pin rather than recompute the value from array position, so a
-recompiled superset topology reproduces byte-identical values for every pre-existing edge.
-Ownership is **per edge**: each parallel link's pins live on its own edge and are reserved
-verbatim, independent of every other edge of the same pair. The link identity and the
-reserve-all-pins-first-then-gap-fill algorithm are specified in
-[../compiler/allocation-stability.md](../compiler/allocation-stability.md).
+**Round-trip rule.** On compile the backend MUST stamp these fields with the allocated values and
+the frontend MUST persist them and send them back unchanged on the next compile. A subsequent
+compile MUST reserve valid pins before gap filling, so a recompiled superset topology reproduces
+byte-identical values for every pre-existing edge. Ownership is **per edge**: each parallel link's
+pins live on its own edge and are reserved independently of every other edge of the same pair.
 
-> **Compliance:** the Edge model currently has no `pinned_*` fields
-> (internal/model/topology.go:110-139); listen ports, transit pairs and link-locals are derived
-> from positional counters over `topo.Edges` order, so any reorder/delete-re-add shifts them.
-> Added and closed by Plan 7 (PR #9); cross-referenced from
-> [../compiler/allocation-stability.md](../compiler/allocation-stability.md).
+A client link has one endpoint-specific exception. The port field attached to the `client`
+endpoint is always absent/zero because the client uses shared `wg0`; the opposite non-client
+endpoint keeps its real per-link listen-port pin. Transit and link-local allocations remain complete
+two-ended pairs. Ordinary non-client links require complete port pairs as well.
+
+The link identity and reserve-all-pins-first-then-gap-fill algorithm are specified in
+[../compiler/allocation-stability.md](../compiler/allocation-stability.md).

@@ -1,126 +1,96 @@
-# Panel app shell
+# Panel shell
 
-<!-- last-verified: 2026-07-15 -->
+<!-- last-verified: 2026-07-17 -->
 
 ## Responsibility
 
-Keep one persistent, mode-aware frame around the routed panel: authentication gating, responsive
-navigation, active-route chrome, appearance and language controls, import/export affordances, and
-custody notices. The shell coordinates domain stores but does not own topology, controller, or
-credential state itself.
+Boot the React panel, select the reachable local/controller workflow, gate controller sessions and
+routes, and keep shared navigation, appearance, language, and routed content in one persistent frame
+(`frontend/src/main.tsx:1-10`, `frontend/src/App.tsx:18-73`,
+`frontend/src/components/shell/Shell.tsx:14-140`).
 
 ## Files
 
-- `frontend/src/App.tsx:18-73` defines the browser router, mode-aware landing, controller-only deep
-  link guard, route-scoped `ReactFlowProvider`, error boundary, and theme provider.
-- `frontend/src/components/shell/Shell.tsx:14-140` performs session restoration and renders the
-  login/splash gate or the persistent sidebar/drawer/topbar/notices/outlet layout.
-- `frontend/src/components/shell/Sidebar.tsx:10-114` shares one navigation body between the
-  collapsible desktop sidebar and always-expanded mobile drawer.
-- `frontend/src/components/shell/Topbar.tsx:14-125` derives the breadcrumb and owns mode-aware design
-  import/export/flush controls plus language, theme, and user menus.
-- `frontend/src/components/shell/nav.ts:12-57` is the single navigation taxonomy and landing helper.
-- `frontend/src/components/shell/UserMenu.tsx:8-113` shows local mode, signed-in identity and expiry,
-  break-glass state, controller version, and sign-out.
-- `frontend/src/theme/ThemeProvider.tsx:7-42` owns the `.dark` and `.no-translucency` document classes;
-  `frontend/index.html:9-31` seeds them before first paint.
-- `frontend/src/stores/uiStore.ts:4-92` owns non-secret shell preferences and ephemeral mobile-drawer
-  state.
-- `frontend/src/i18n/index.ts:1-87` and `frontend/src/i18n/messages/{en,zh}.ts` provide the keyed,
-  typed catalog, interpolation, English fallback, and coded-error localization.
+- `frontend/src/main.tsx:1-10` — mounts the shared React application entry into the browser root.
+- `frontend/src/App.tsx:18-73` — defines mode-aware landing, controller-only route guards, route
+  ownership, the design-only React Flow provider, and top-level error/theme boundaries.
+- `frontend/src/components/shell/Shell.tsx:14-140` — gates controller sessions and renders the
+  responsive chrome, notices, and route outlet.
+- `frontend/src/components/shell/nav.ts:15-57` — provides the shared route taxonomy, per-mode
+  visibility, landing path, and active-route lookup.
+- `frontend/src/components/shell/Sidebar.tsx:26-114` — renders one mode-filtered navigation body in
+  desktop and drawer hosts.
+- `frontend/src/components/shell/Topbar.tsx:18-125` — renders route context, responsive navigation,
+  mode-aware design import/export controls, and shared language/theme/account controls.
+- `frontend/src/components/pages/SettingsPage.tsx:13-107,172-214` — exposes runtime mode and
+  appearance selection while hiding the mode switch from local-only builds.
+- `frontend/src/stores/uiStore.ts:4-99` — owns non-secret shell preferences and volatile drawer and
+  Fleet-live state behind an explicit persistence allowlist.
+- `frontend/src/lib/deployMode.ts:31-54` — converts `VITE_LOCAL_ONLY` into the typed build-mode
+  descriptor and fixes the local compute engine to Go/WASM.
+- `frontend/src/theme/ThemeProvider.tsx:7-42` and `frontend/index.html:9-31` — synchronize theme and
+  translucency classes after mount and before first paint.
+- `frontend/src/i18n/index.ts:11-46,59-105` — defines typed language keys, English fallback,
+  interpolation, and coded-error localization.
+- `frontend/package.json:6-17` — exposes the default build and the `VITE_LOCAL_ONLY` static build
+  from the same source package.
 
-## Router and mode boundaries
+## Inputs
 
-`App` renders `ErrorBoundary -> ThemeProvider -> RouterProvider`. The router mounts `Shell` once and
-places route content in its `<Outlet>`. `/design` alone receives a `ReactFlowProvider`; the other
-pages do not initialize the canvas runtime (`frontend/src/App.tsx:36-61`).
+The browser bootstrap supplies `<App />`, while the build supplies `VITE_LOCAL_ONLY` through
+`deployMode(): DeployMode`; both default and local-only artifacts therefore enter through the same
+React tree (`frontend/src/main.tsx:1-10`, `frontend/src/lib/deployMode.ts:40-54`,
+`frontend/package.json:7-12`).
 
-The index route and wildcard redirect to `/overview` in controller mode and `/design` in local
-mode. Overview, Fleet, and fleet-node detail are controller-only not just in the sidebar: their
-elements are wrapped in `RequireControllerMode`, so a local-mode deep link redirects instead of
-rendering stale cached controller UI (`frontend/src/App.tsx:18-34,52-58`). Design, Deploy, Security,
-and Settings remain reachable in both modes and gate their own mode-specific content.
+The composed controller store supplies workflow mode; [panel authentication](panel-auth.md) supplies
+`checkSession()`, derived login state, and the in-memory break-glass token; [panel design](panel-design.md)
+supplies language and import notices; `uiStore` supplies responsive and appearance state
+(`frontend/src/components/shell/Shell.tsx:25-37`).
 
-`NAV_ITEMS` supplies paths, icons, labels, and local visibility. Sidebar links, Topbar active-route
-labels, and landing behavior derive from that table rather than maintaining parallel route lists
-(`frontend/src/components/shell/nav.ts:33-57`).
+## Outputs
 
-## Authentication gate
+The shell routes local design work to [panel design](panel-design.md) and controller Fleet/deploy
+work to [panel deploy and Fleet](panel-deploy-fleet.md) (`frontend/src/App.tsx:39-60`). The Fleet
+node route embeds [panel telemetry](panel-telemetry.md) without moving telemetry state into the shell
+(`frontend/src/components/pages/FleetNodeDetailPage.tsx:192-244,306-319`).
 
-Local mode enters the shell directly. Controller mode first probes the httpOnly session cookie via
-`checkSession`. Until that probe settles, the shell renders a quiet full-viewport status splash;
-this prevents a protected canvas or login-page flash. An unauthenticated operator sees `LoginPage`
-before any chrome renders. A configured in-memory break-glass bearer passes the gate without being
-misrepresented as a login session (`frontend/src/components/shell/Shell.tsx:18-82`).
+It produces the persistent sidebar/topbar/notice frame around `<Outlet />` and applies `.dark` and
+`.no-translucency` document classes for every route (`frontend/src/components/shell/Shell.tsx:84-138`,
+`frontend/src/theme/ThemeProvider.tsx:22-42`).
 
-The requested route remains in the router while the gate is closed, so a valid session resumes the
-original deep link. Switching away from and back to controller mode resets and reruns the probe
-instead of trusting stale login state.
+## Decision points (if any)
 
-The shell never reads or persists session credentials. It consumes derived auth state from
-`controllerStore`; cookie handling, CSRF, bearer headers, and logout remain in the auth/client
-layer. `UserMenu` distinguishes a named session from break-glass recovery and exposes session
-expiry, server build version, and sign-out only where meaningful.
+- A truthy `VITE_LOCAL_ONLY` makes controller mode unreachable; otherwise the all-in-one build lets
+  the operator select local or controller mode (`frontend/src/lib/deployMode.ts:40-54`,
+  `frontend/src/components/pages/SettingsPage.tsx:82-107`).
+- Runtime mode chooses the landing path, visible navigation, and whether Overview/Fleet deep links
+  render or redirect (`frontend/src/components/shell/nav.ts:33-50`, `frontend/src/App.tsx:18-34,52-58`).
+- Local mode enters the frame directly; controller mode first shows a session-check splash, then
+  either [panel authentication](panel-auth.md) or the routed frame (`frontend/src/components/shell/Shell.tsx:39-84`).
 
-## Responsive chrome and design surface
+## Invariants
 
-At the `lg` breakpoint and above, the docked Sidebar can persist an expanded or icon-only width.
-Below it, the docked sidebar is hidden and Topbar opens an off-canvas Drawer containing the same
-navigation body. `mobileNavOpen` is ephemeral and omitted from persistence, so reload cannot
-restore a blocking overlay (`frontend/src/components/shell/Shell.tsx:84-107` and
-`frontend/src/stores/uiStore.ts:19-24,80-89`).
+- Controller-only pages are protected by route guards as well as hidden navigation, so a local-mode
+  deep link cannot expose cached controller UI (`frontend/src/App.tsx:24-34,52-54`,
+  `frontend/src/components/shell/nav.ts:26-30,42-45`).
+- The local-only build hides its controller affordance and the store-side transition refuses the
+  same mode even when called programmatically (`frontend/src/components/pages/SettingsPage.tsx:82-107`,
+  `frontend/src/stores/controller/sync.ts:383-413`).
+- Browser persistence remains allowlisted by domain: shell storage keeps only non-secret
+  preferences, controller storage omits credentials and strips live telemetry, and a server-held
+  topology mirror is blanked before topology persistence (`frontend/src/stores/uiStore.ts:73-96`,
+  `frontend/src/stores/controller/persist.ts:14-45`,
+  `frontend/src/stores/topologyStore.ts:876-908`).
 
-The Design route is deliberately not a compressed desktop editor. Below `lg` it mounts a
-read-only pan/zoom canvas with a gate; at desktop width it mounts the toolbar, optional elements
-list, editable canvas, selection aside, and validation footer
-(`frontend/src/components/pages/DesignPage.tsx:12-60`).
+## Gotchas (optional)
 
-The shell includes a keyboard skip link, semantic navigation and main regions, accessible drawer
-labels, route-aware `NavLink` current-state behavior, and shared focus-ring styling.
-
-## Design import/export controls
-
-Topbar shows the project I/O cluster only on Design. Export downloads the current design in either
-mode. Import is custody-aware:
-
-- Local mode loads a local draft through `topologyStore.importProject`.
-- Controller mode confirms replacement, strips non-authoritative key material, writes a new server
-  topology version, and rehydrates from server through `controllerStore.importDesignToServer`.
-
-Flush is local-only. In controller mode clearing the disposable browser mirror would neither
-delete nor undo the authoritative server design, so presenting it as a destructive action would be
-misleading (`frontend/src/components/shell/Topbar.tsx:30-43`).
-
-Shell-level notice banners surface when a server hydration replaces a local design, when a
-controller import drops design key material, or when a local import clears unusable stranded
-public-key-only state (`frontend/src/components/shell/Shell.tsx:109-133`).
-
-## Appearance, language, and persistence
-
-`uiStore` persists an explicit non-secret allowlist: `theme`, `sidebarCollapsed`, effective
-`translucency`, and `localTranslucency`. `mobileNavOpen` is excluded. ThemeProvider applies the
-resolved system/light/dark preference and vibrancy class; the inline document script reads the
-same store shape before React mounts to avoid a theme flash.
-
-Controller mode treats server settings as the effective translucency authority, while
-`localTranslucency` retains the user's independent local preference. Returning to local mode
-restores that preference instead of inheriting the server's fleet setting
-(`frontend/src/stores/uiStore.ts:25-41,60-64`).
-
-UI language remains part of the topology workspace and is consumed explicitly by components. The
-catalog is keyed by the complete English key set; Chinese is additive and falls back per key.
-`tError` and `tValidationError` localize coded backend and validation errors without ad-hoc string
-parsing (`frontend/src/i18n/index.ts:11-87`).
-
-## Invariants and gotchas
-
-- The auth gate encloses all shell chrome in controller mode; logged-out narrow viewports do not
-  leak a sidebar or drawer.
-- Controller-only visibility is enforced by router guards as well as navigation filtering.
-- The shell persists preferences only. Credentials and topology/controller domain state stay in
-  their dedicated stores and custody allowlists.
-- The anti-FOUC script depends on the `ui-storage` key and its persisted field names; a store-shape
-  migration must update both the store and inline bootstrap.
-- Import/export semantics are mode-aware even though their controls occupy the same Topbar slots.
-
-Deep documentation: [frontend architecture](../docs/spec/frontend/architecture.md).
+- Mode switching is intentionally asymmetric: controller-to-local flushes or purges according to
+  canvas provenance, while local-to-controller preserves valid local keypairs, clears stranded keys,
+  and drops the local compile result (`frontend/src/stores/controller/sync.ts:339-413`).
+- The pre-paint script and `uiStore` must keep the `ui-storage`, `theme`, and `translucency` names
+  aligned or the initial frame can disagree with `ThemeProvider` (`frontend/index.html:9-31`,
+  `frontend/src/stores/uiStore.ts:73-96`).
+- Language is a topology-workspace preference while theme/chrome preferences live in `uiStore`, so
+  shell controls deliberately read two stores (`frontend/src/components/shell/LanguageToggle.tsx:1-35`,
+  `frontend/src/components/shell/ThemeToggle.tsx:1-32`,
+  `frontend/src/stores/topologyStore.ts:901-907`).

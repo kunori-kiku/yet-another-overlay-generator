@@ -165,7 +165,7 @@ func TestCompileAndStage_EmptyStagePurges(t *testing.T) {
 	}
 
 	// Retract the design: replace the topology with only the never-enrolled
-	// client, so the enrolled subgraph is empty.
+	// client, so the deployment-ready subgraph is empty.
 	retracted := stageTestTopo()
 	retracted.Nodes = retracted.Nodes[2:3] // node-client only
 	retracted.Edges = nil

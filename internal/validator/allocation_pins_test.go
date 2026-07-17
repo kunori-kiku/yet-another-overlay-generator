@@ -317,27 +317,58 @@ func clientEdgeTopology() *model.Topology {
 	return topo
 }
 
-// TestValidateAllocationPins_ClientEdgePortPinRejected asserts that a client edge carrying a port pin errors (a client uses a single wg0 with no per-peer port).
-func TestValidateAllocationPins_ClientEdgePortPinRejected(t *testing.T) {
-	topo := clientEdgeTopology()
-	topo.Edges[0].PinnedFromPort = 51820
-	topo.Edges[0].PinnedToPort = 51820
-	result := ValidateSemantic(topo)
-	if pinErrorCount(result) == 0 {
-		t.Errorf("a client edge carrying a port pin should error, but there were no pin errors: %v", result.Errors)
+func TestValidateAllocationPins_ClientEndpointContract(t *testing.T) {
+	tests := []struct {
+		name     string
+		mutate   func(*model.Edge)
+		wantCode Code
+	}{
+		{
+			name:   "router side port and complete addresses are valid",
+			mutate: func(*model.Edge) {},
+		},
+		{
+			name: "port on client endpoint is rejected",
+			mutate: func(edge *model.Edge) {
+				edge.PinnedFromPort = 51900
+			},
+			wantCode: CodePinClientPortPin,
+		},
 	}
-}
 
-// TestValidateAllocationPins_ClientEdgeResourcePinWarns asserts that a client edge carrying transit/link-local pins warns (they will be ignored) rather than errors.
-func TestValidateAllocationPins_ClientEdgeResourcePinWarns(t *testing.T) {
-	topo := clientEdgeTopology()
-	topo.Edges[0].PinnedFromTransitIP = "10.10.0.1"
-	topo.Edges[0].PinnedToTransitIP = "10.10.0.2"
-	result := ValidateSemantic(topo)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			topo := clientEdgeTopology()
+			edge := &topo.Edges[0]
+			edge.PinnedToPort = 51901
+			edge.PinnedFromTransitIP = "10.10.0.5"
+			edge.PinnedToTransitIP = "10.10.0.6"
+			edge.PinnedFromLinkLocal = "fe80::5"
+			edge.PinnedToLinkLocal = "fe80::6"
+			tc.mutate(edge)
 
-	// transit/link-local pins on a client edge must not produce a pin error.
-	if pinErrorCount(result) != 0 {
-		t.Errorf("transit/link-local pins on a client edge should only warn, not error, but reported pin errors: %v", result.Errors)
+			result := ValidateSemantic(topo)
+			hasCode := func(findings []ValidationError, code Code) bool {
+				for _, finding := range findings {
+					if finding.Code == string(code) {
+						return true
+					}
+				}
+				return false
+			}
+
+			if hasCode(result.Errors, CodePinClientAllocationIgnored) || hasCode(result.Warnings, CodePinClientAllocationIgnored) {
+				t.Fatalf("deprecated %s finding was emitted: errors=%v warnings=%v", CodePinClientAllocationIgnored, result.Errors, result.Warnings)
+			}
+			if tc.wantCode == "" {
+				if pinErrorCount(result) != 0 {
+					t.Fatalf("valid endpoint-specific client allocations produced pin errors: %v", result.Errors)
+				}
+				return
+			}
+			if !hasCode(result.Errors, tc.wantCode) {
+				t.Fatalf("errors = %v, want code %s", result.Errors, tc.wantCode)
+			}
+		})
 	}
-	assertHasWarning(t, result, "edges[0]")
 }

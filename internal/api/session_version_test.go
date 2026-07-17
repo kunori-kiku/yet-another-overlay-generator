@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrycap"
 )
 
 // newVersionEnv stands up the operator mux with a specific controller build version (plan-7),
@@ -32,7 +34,7 @@ func newVersionEnv(t *testing.T, version string) *httptest.Server {
 	return srv
 }
 
-func sessionControllerVersion(t *testing.T, srv *httptest.Server, session, csrf *http.Cookie) string {
+func sessionControllerInfo(t *testing.T, srv *httptest.Server, session, csrf *http.Cookie) sessionResponseJSON {
 	t.Helper()
 	resp := doCookieReq(t, srv, http.MethodGet, "session", []*http.Cookie{session, csrf}, "")
 	defer resp.Body.Close()
@@ -43,15 +45,19 @@ func sessionControllerVersion(t *testing.T, srv *httptest.Server, session, csrf 
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
 		t.Fatalf("decode session: %v", err)
 	}
-	return r.ControllerVersion
+	return r
 }
 
 // TestSessionReportsControllerVersion: a stamped build surfaces its version on the operator session.
 func TestSessionReportsControllerVersion(t *testing.T) {
 	srv := newVersionEnv(t, "v2.0.0-beta.9")
 	session, csrf, _ := loginForCookies(t, srv)
-	if got := sessionControllerVersion(t, srv, session, csrf); got != "v2.0.0-beta.9" {
+	info := sessionControllerInfo(t, srv, session, csrf)
+	if got := info.ControllerVersion; got != "v2.0.0-beta.9" {
 		t.Fatalf("controller_version = %q, want v2.0.0-beta.9", got)
+	}
+	if want := []string{telemetrycap.ControllerTopologyPolicyV2}; !reflect.DeepEqual(info.ControllerCapabilities, want) {
+		t.Fatalf("controller_capabilities = %v, want %v", info.ControllerCapabilities, want)
 	}
 }
 
@@ -59,7 +65,7 @@ func TestSessionReportsControllerVersion(t *testing.T) {
 func TestSessionVersionDefaultsToDev(t *testing.T) {
 	srv := newVersionEnv(t, "")
 	session, csrf, _ := loginForCookies(t, srv)
-	if got := sessionControllerVersion(t, srv, session, csrf); got != "dev" {
+	if got := sessionControllerInfo(t, srv, session, csrf).ControllerVersion; got != "dev" {
 		t.Fatalf("controller_version = %q, want dev (empty→dev normalization)", got)
 	}
 }

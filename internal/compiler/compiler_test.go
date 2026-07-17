@@ -2,10 +2,138 @@ package compiler
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/validator"
 )
+
+func TestCompilePreservesStructuredValidationFindings(t *testing.T) {
+	tests := []struct {
+		name      string
+		phase     string
+		mutate    func(*model.Topology)
+		wantField string
+		wantCode  validator.Code
+	}{
+		{
+			name:  "schema",
+			phase: "schema",
+			mutate: func(topo *model.Topology) {
+				topo.Project.Name = ""
+			},
+			wantField: "project.name",
+			wantCode:  validator.CodeProjectNameRequired,
+		},
+		{
+			name:  "semantic",
+			phase: "semantic",
+			mutate: func(topo *model.Topology) {
+				topo.Nodes[0].DomainID = "missing-domain"
+			},
+			wantField: "nodes[0].domain_id",
+			wantCode:  validator.CodeNodeDomainRefMissing,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			topo := simpleMeshTopo()
+			tc.mutate(topo)
+			_, err := NewCompiler().Compile(context.Background(), topo, testKeys())
+			var validationErr *TopologyValidationError
+			if !errors.As(err, &validationErr) {
+				t.Fatalf("Compile error = %T %v, want *TopologyValidationError", err, err)
+			}
+			if validationErr.Phase != tc.phase {
+				t.Fatalf("phase = %q, want %q", validationErr.Phase, tc.phase)
+			}
+			if len(validationErr.Findings) == 0 {
+				t.Fatal("structured validation error has no findings")
+			}
+			finding := validationErr.Findings[0]
+			if finding.Field != tc.wantField || finding.Code != string(tc.wantCode) {
+				t.Fatalf("first finding = %+v, want field %q code %q", finding, tc.wantField, tc.wantCode)
+			}
+		})
+	}
+}
+
+func TestCompileClientEdgeAllocationsRemainStableAcrossSuperset(t *testing.T) {
+	topo := &model.Topology{
+		Project: model.Project{ID: "client-pin-001", Name: "Client Pin Regression"},
+		Domains: []model.Domain{{
+			ID: "domain-1", Name: "mesh", CIDR: "10.31.0.0/24",
+			AllocationMode: "auto", RoutingMode: "babel",
+		}},
+		Nodes: []model.Node{
+			{ID: "node-1", Name: "client", Role: "client", DomainID: "domain-1"},
+			{
+				ID: "node-2", Name: "router", Hostname: "router.example.com",
+				Role: "router", DomainID: "domain-1",
+				Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true},
+			},
+		},
+		Edges: []model.Edge{{
+			ID: "client-router", FromNodeID: "node-1", ToNodeID: "node-2", Type: "public-endpoint",
+			EndpointHost: "198.51.100.2", Transport: "udp", IsEnabled: true,
+		}},
+	}
+
+	first, err := NewCompiler().Compile(context.Background(), topo, testKeys())
+	if err != nil {
+		t.Fatalf("first Compile: %v", err)
+	}
+	original := first.Topology.Edges[0]
+	if original.PinnedFromPort != 0 {
+		t.Fatalf("client-side PinnedFromPort = %d, want 0", original.PinnedFromPort)
+	}
+	if original.PinnedToPort == 0 {
+		t.Fatal("router-side PinnedToPort = 0, want a sticky listen port")
+	}
+	if original.CompiledPort != original.PinnedToPort {
+		t.Fatalf("CompiledPort = %d, want router-side port %d", original.CompiledPort, original.PinnedToPort)
+	}
+	if original.PinnedFromTransitIP == "" || original.PinnedToTransitIP == "" {
+		t.Fatalf("client edge transit pair is incomplete: %+v", original)
+	}
+	if original.PinnedFromLinkLocal == "" || original.PinnedToLinkLocal == "" {
+		t.Fatalf("client edge link-local pair is incomplete: %+v", original)
+	}
+
+	// Add a link whose identity sorts before node-1|node-2. Without reserving and reusing the
+	// existing client-link allocations, this new link would take the first router port/address
+	// slots and renumber the established client edge.
+	expanded := *first.Topology
+	expanded.Nodes = append(append([]model.Node(nil), first.Topology.Nodes...), model.Node{
+		ID: "node-0", Name: "earlier-router", Role: "router", DomainID: "domain-1",
+		Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true},
+	})
+	expanded.Edges = append(append([]model.Edge(nil), first.Topology.Edges...), model.Edge{
+		ID: "earlier-link", FromNodeID: "node-0", ToNodeID: "node-2", Type: "direct",
+		EndpointHost: "198.51.100.2", Transport: "udp", IsEnabled: true,
+	})
+	keys := testKeys()
+	keys["node-0"] = KeyPair{PrivateKey: "privkey-node0-fake", PublicKey: "pubkey-node0-fake"}
+
+	second, err := NewCompiler().Compile(context.Background(), &expanded, keys)
+	if err != nil {
+		t.Fatalf("Compile of expanded persisted topology: %v", err)
+	}
+	got := second.Topology.Edges[0]
+	if got.PinnedFromPort != 0 {
+		t.Fatalf("expanded client-side PinnedFromPort = %d, want 0", got.PinnedFromPort)
+	}
+	if got.PinnedToPort != original.PinnedToPort ||
+		got.PinnedFromTransitIP != original.PinnedFromTransitIP ||
+		got.PinnedToTransitIP != original.PinnedToTransitIP ||
+		got.PinnedFromLinkLocal != original.PinnedFromLinkLocal ||
+		got.PinnedToLinkLocal != original.PinnedToLinkLocal ||
+		got.CompiledPort != original.CompiledPort {
+		t.Fatalf("client allocation changed across superset compile:\n  first: %+v\n  next:  %+v", original, got)
+	}
+}
 
 func testKeys() map[string]KeyPair {
 	return map[string]KeyPair{

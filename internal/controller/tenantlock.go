@@ -16,7 +16,10 @@ package controller
 // single-process by design (filestore.go header), and every participating mutation
 // routes through this package's lock boundary.
 
-import "sync"
+import (
+	"context"
+	"sync"
+)
 
 // tenantOpMu maps TenantID → *sync.Mutex serializing multi-call trust and fleet
 // transitions per tenant.
@@ -29,4 +32,14 @@ func lockTenantOps(t TenantID) func() {
 	mu := m.(*sync.Mutex)
 	mu.Lock()
 	return mu.Unlock
+}
+
+// SaveTopology is the production operator-write boundary for topology JSON. A deploy holds the same
+// tenant operation lock from its initial read through staged-set publication, so a save either commits
+// before that read and is included, or commits after staging and remains the next unapplied draft. It
+// can never land inside the compile/sign/export transaction. The Store CAS remains the atomic
+// allocation-writeback guard for alternate adapters and direct Store users.
+func SaveTopology(ctx context.Context, store Store, t TenantID, raw []byte) (TopologyRecord, error) {
+	defer lockTenantOps(t)()
+	return store.PutTopology(ctx, t, raw)
 }

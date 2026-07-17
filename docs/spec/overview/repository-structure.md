@@ -7,11 +7,12 @@ WireGuard private key.
 
 ## Package map
 
-There are **25 direct package directories under `internal/`**:
+There are **31 direct package directories under `internal/`**:
 
 `agent`, `allocator`, `allocconst`, `api`, `apierr`, `arch`, `artifacts`, `bundlesig`, `compiler`,
-`controller`, `dast`, `edgecase`, `linkid`, `localcompile`, `model`, `naming`, `normalize`,
-`regression`, `render`, `renderer`, `runtimecontract`, `trustlist`, `validator`, `version`, and
+`controller`, `dast`, `devicemetric`, `edgecase`, `linkid`, `localcompile`, `model`, `naming`,
+`normalize`, `probemetric`, `probepolicy`, `regression`, `render`, `renderer`, `runtimecontract`,
+`telemetrycap`, `telemetrymetric`, `telemetryprotocol`, `trustlist`, `validator`, `version`, and
 `wiredrift`.
 
 They divide into four structural groups:
@@ -25,8 +26,10 @@ They divide into four structural groups:
   enrolls, polls, verifies, applies, reports, and self-updates; `runtimecontract` holds stateful
   agent-to-controller condition DTOs (`internal/runtimecontract/condition.go:1-35`).
 - **Cryptographic and contract leaves:** `bundlesig` owns canonical bundle signing; `trustlist` owns
-  keystone canonicalization/pins/WebAuthn verification; `apierr` owns stable coded errors; `version`
-  owns shared version ordering.
+  keystone canonicalization/pins/WebAuthn verification; `apierr` owns stable coded errors;
+  `probepolicy`/`probemetric` own active-policy/result contracts; `devicemetric` owns automatic-device
+  inventory/numerics; `telemetrymetric` owns chart/live registration; `telemetrycap` and
+  `telemetryprotocol` own negotiation/transport constants; `version` owns shared version ordering.
 - **Verification-only packages:** `arch`, `dast`, `edgecase`, `regression`, and `wiredrift` turn
   architectural, HTTP-security, adversarial-input, anti-rollback, and Go/TypeScript wire-drift rules
   into tests. The wire-drift gate reads both languages' source contracts and fails in both mismatch
@@ -65,6 +68,12 @@ yet-another-overlay-generator/
 │   ├── artifacts/             # Bundle file set and export adapter
 │   ├── normalize/             # Persisted allocation-pin healing
 │   ├── localcompile/          # Pure pipeline façade + frozen WASM/Go contract
+│   ├── probepolicy/           # Strict v1/v2 signed active-telemetry policy
+│   ├── probemetric/           # Strict typed latest/recent probe result contract
+│   ├── devicemetric/          # Bounded inventory + closed numeric device contract
+│   ├── telemetrymetric/       # Charted/live-only metric catalog
+│   ├── telemetrycap/          # Authenticated policy/runtime capability tokens
+│   ├── telemetryprotocol/     # Reliable heartbeat header/envelope bounds
 │   ├── controller/
 │   │   ├── store.go              # Store interface + tenant/runtime types
 │   │   ├── storecore.go          # Shared locked store behavior
@@ -77,7 +86,7 @@ yet-another-overlay-generator/
 │   │   ├── keystone.go           # Pinned operator credential / membership state
 │   │   ├── trustlist_sign.go     # Stage-sign commit path
 │   │   ├── rekey.go              # Fleet/node rekey state
-│   │   └── telemetry_history.go  # Bounded resource-history storage
+│   │   └── telemetry_history.go  # Bounded resource/probe/device history storage
 │   ├── api/
 │   │   ├── server.go             # Two muxes, health route, lifecycle/timeouts
 │   │   ├── routes_controller.go  # Operator/agent registration and middleware

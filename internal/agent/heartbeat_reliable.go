@@ -478,6 +478,7 @@ func runReliableHeartbeat(poster ReliableTelemetryPoster, tel *Telemetry, interv
 	log := &telemetryLogger{w: stderr}
 	queue := newTelemetryReplayQueue()
 	probeKick := make(chan struct{}, 1)
+	completionKick := make(chan struct{}, 1)
 	capabilityKick := make(chan struct{}, 1)
 	capabilities := newTelemetryCapabilityState(
 		func() { TryKick(capabilityKick) },
@@ -488,7 +489,9 @@ func runReliableHeartbeat(poster ReliableTelemetryPoster, tel *Telemetry, interv
 			TryKick(probeKick)
 		}
 	})
+	tel.setTelemetryCompletionKick(func() { TryKick(completionKick) })
 	defer tel.setProbeCompletionKick(nil)
+	defer tel.setTelemetryCompletionKick(nil)
 	go runTelemetryUploaderWithCapabilities(poster, queue, done, log, capabilities, telemetryRetryDelay)
 	sequencer := newTelemetrySequencer()
 
@@ -533,6 +536,10 @@ func runReliableHeartbeat(poster ReliableTelemetryPoster, tel *Telemetry, interv
 			if capabilities.probeSamplesEnabled() {
 				collect()
 			}
+		case <-completionKick:
+			// Device and future cadence-owned metric completions enter the same immutable replay
+			// queue immediately; the one-slot channel keeps collection non-overlapping and coalesced.
+			collect()
 		case <-capabilityKick:
 			// Both negotiation directions need one immediate sample. Enable captures any attempts that
 			// accumulated before the first capable receipt; disable sends a clean legacy-shaped metrics

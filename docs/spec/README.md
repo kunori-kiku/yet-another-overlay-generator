@@ -54,10 +54,10 @@ docs/spec/
 │   ├── ci-cd.md                   # Release workflow, deployment scripts
 │   ├── deployment-topology.md     # Two deployments (static-local site vs controller),
 │   │                              #   no anonymous compute surface, security delta
-│   ├── telemetry-history.md       # Retained per-node resource history + node-detail
-│   │                              #   CPU/RAM/load charts; the /node-history query API
-│   ├── active-telemetry.md        # Signed per-node ICMP/TCP probe policy, runtime bounds,
-│   │                              #   Fleet configuration, and live result contract
+│   ├── telemetry-history.md       # Retained resource/probe/device chart history and the
+│   │                              #   bounded exact-series /node-history query API
+│   ├── active-telemetry.md        # Signed v1/v2 ICMP/TCP/URL and automatic-device policy,
+│   │                              #   rollout/runtime bounds, Fleet configuration/results
 │   └── examples.md                # Example topologies
 ├── security/
 │   └── security.md                # Security considerations

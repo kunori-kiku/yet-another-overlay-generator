@@ -9,6 +9,7 @@ A Node represents a physical or virtual host in the overlay.
 | `hostname` | string | OS hostname (optional) |
 | `platform` | `"debian" \| "ubuntu"` | Target OS for install script |
 | `role` | `"peer" \| "router" \| "relay" \| "gateway" \| "client"` | Node role |
+| `deployment_mode` | `"managed" \| "manual" \| ""` | Controller delivery mode, orthogonal to role. Empty is managed. Managed nodes become deployment-ready through approved enrollment; manual nodes carry a validated public key in topology and never enroll. |
 | `domain_id` | string | Reference to owning Domain |
 | `overlay_ip` | string | Assigned overlay IP (auto or manual) |
 | `listen_port` | int | WireGuard base listen port (default: 51820) |
@@ -26,9 +27,47 @@ A Node represents a physical or virtual host in the overlay.
 | `ssh_port` | int | SSH port (default: 22) |
 | `ssh_user` | string | SSH username (default: root) |
 | `ssh_key_path` | string | SSH private key file path |
-| `telemetry_probes` | []TelemetryProbe | Optional managed-node ICMP/TCP checks. Each has one IP-or-DNS `host`; TCP additionally requires `port`. The policy is signed and activated at Deploy, not an arbitrary command or URL surface. See [../operations/active-telemetry.md](../operations/active-telemetry.md). |
+| `telemetry_probes` | []TelemetryProbe | Optional managed-node ICMP, TCP, or URL checks. ICMP/TCP use an IP-or-DNS `host` (TCP also requires `port`); URL uses its separately typed absolute HTTP(S) `url` and expected success status. An unfinished destination may remain in a saved draft, but a ready node cannot preview/stage until it is completed or removed. |
+| `telemetry_devices` | *TelemetryDevicePolicy | Optional managed-node automatic device discovery. The only current mode is `all-eligible-v1`; the operator opts in once and the agent discovers eligible local disks, filesystems, and GPUs rather than receiving a hand-authored device list. |
 
 Role semantics are specified in [../roles/roles.md](../roles/roles.md).
+
+## Active telemetry model
+
+```go
+type TelemetryProbe struct {
+    ID                  string `json:"id"`
+    Name                string `json:"name,omitempty"`
+    Type                string `json:"type"`
+    Host                string `json:"host,omitempty"`
+    Port                int    `json:"port,omitempty"`
+    URL                 string `json:"url,omitempty"`
+    ExpectedStatus      int    `json:"expected_status,omitempty"`
+    IntervalSeconds     int    `json:"interval_seconds,omitempty"`
+    TimeoutMilliseconds int    `json:"timeout_milliseconds,omitempty"`
+}
+
+type TelemetryDevicePolicy struct {
+    Mode string `json:"mode"` // "all-eligible-v1"
+}
+```
+
+Probe `id` is stable and unique within the node. `name` is optional controller/Fleet presentation
+metadata only: it is excluded from executable bundle policy and agent reports. Executable/history
+identity is the ID plus exact typed destination—`type + host + port` for ICMP/TCP, or
+`type + url + expected_status` for URL. ICMP forbids a port; TCP requires one. URL probes do not
+overload `host`, use a fixed GET at runtime, and treat status 200 as success when
+`expected_status` is omitted. The actual returned status is live result context, not topology and
+not a chart series; latency and availability are charted.
+
+All active telemetry is managed-node policy authorized at Deploy, not an arbitrary command surface.
+Manual nodes cannot carry it. The renderer keeps the strict version-1 `telemetry.json` member for
+legacy ICMP/TCP-only policy and uses the mutually exclusive version-2 `telemetry-policy.json` when
+URL or device fields are present. Both project `name` away and are checksum/keystone covered before
+activation. `telemetry_devices` is deliberately a small opt-in selector; discovered inventory and
+numeric samples are runtime telemetry and never topology fields. Bounds, defaults, destination
+validation, agent capability rollout, and chart behavior are specified in
+[../operations/active-telemetry.md](../operations/active-telemetry.md).
 
 ## Key persistence semantics
 

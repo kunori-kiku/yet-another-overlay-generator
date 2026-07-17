@@ -85,11 +85,19 @@ user-supplied.
 | `wireguard_public_key` | — | non-empty ⇒ key-fixed (allocation-stability) | n/a |
 | `public_endpoints[].host` | schema | **strict charset** (rendered into the per-peer WireGuard config `Endpoint =` parsed by root's wg-quick); `.Port` is an unrendered reachability hint (the reverse-endpoint fallback uses the allocated listen port), so it is not validated | schema |
 | `extra_prefixes[]` | schema | each a parseable IPv4 CIDR | schema |
+| `telemetry_probes` | schema | managed nodes only; at most 16 unique typed `icmp`/`tcp`/`url` rows; controller-only name plus exact destination/schedule fields are validated by `probepolicy.Validate` | schema |
+| `telemetry_devices` | schema | managed nodes only; the only accepted opt-in is `mode: "all-eligible-v1"`, validated by `probepolicy.ValidateDevicePolicy` | schema |
 | `ssh_alias` | schema | **strict charset** (interpolated into root/operator shell) | schema |
 | `ssh_host` | schema | **strict charset** (interpolated into bash + PowerShell) | schema |
 | `ssh_port` | schema | range 1–65535 | schema |
 | `ssh_user` | schema | **strict charset** | schema |
 | `ssh_key_path` | schema | path charset (forbids shell metacharacters) | schema |
+
+Active-telemetry validation distinguishes draft storage from deployment readiness. The controller may
+save an unfinished typed probe row, but compile preview and stage validate the ready subgraph through
+the same canonical `probepolicy` rules. ICMP accepts one IP-or-ASCII-DNS `host`; TCP adds a port; URL
+uses a separately validated absolute HTTP(S) `url` plus an exact expected status (default 200).
+Manual nodes cannot carry either telemetry field because they have no resident agent.
 
 > **Compliance — canonical node IDs:** a node ID is the only key for its complete per-node bundle
 > directory. Schema validation first applies `nodeIDCharset` (`[A-Za-z0-9._-]+`) and then

@@ -66,19 +66,49 @@ export interface Node {
   ssh_port?: number;
   ssh_user?: string;
   ssh_key_path?: string;
-  // Optional active-connectivity checks run by this managed node. Each signed policy names one
-  // destination host and, for TCP, one port; it is deliberately not an arbitrary URL/command.
+  // Optional active checks run by this managed node. Every destination, expected response, and
+  // schedule is fixed by the signed policy; this is not an arbitrary request/command surface.
   telemetry_probes?: TelemetryProbe[];
+  // Automatic device discovery uses the separately versioned successor telemetry policy.
+  telemetry_devices?: TelemetryDevicePolicy;
 }
 
-export interface TelemetryProbe {
+export interface TelemetryDevicePolicy {
+  mode: 'all-eligible-v1';
+}
+
+interface TelemetryProbeBase {
   id: string;
-  type: 'icmp' | 'tcp';
-  host: string;
-  port?: number;
+  // Optional controller/Fleet display label. Stable id plus the exact typed destination remain the
+  // executable/history identity; name is deliberately excluded from telemetry.json and reports.
+  name?: string;
   interval_seconds?: number;
   timeout_milliseconds?: number;
 }
+
+export type TelemetryProbe = TelemetryProbeBase & (
+  | {
+      type: 'icmp';
+      host: string;
+      port?: never;
+      url?: never;
+      expected_status?: never;
+    }
+  | {
+      type: 'tcp';
+      host: string;
+      port: number;
+      url?: never;
+      expected_status?: never;
+    }
+  | {
+      type: 'url';
+      url: string;
+      expected_status?: number;
+      host?: never;
+      port?: never;
+    }
+);
 
 export interface PublicEndpoint {
   id: string;
@@ -122,9 +152,11 @@ export interface Edge {
   link_direction?: 'both' | 'forward';
   is_enabled: boolean;
   notes?: string;
-  // Allocation pins: written by the compiler and echoed back verbatim, so that a recompile preserves existing
-  // allocations (port / transit IP / link-local address), so adding new nodes does not disturb existing links. See
-  // docs/spec/compiler/allocation-stability.md.
+  // Allocation pins are compiler-written sticky state. Transit and link-local values remain
+  // complete pairs. Ports are paired on ordinary links; on a client link only the client endpoint
+  // lacks a per-link port, while the non-client endpoint retains one valid sticky port.
+  // compiled_port is only the effective dial-port echo, not the sticky allocation authority.
+  // See docs/spec/compiler/allocation-stability.md.
   pinned_from_port?: number;
   pinned_to_port?: number;
   pinned_from_transit_ip?: string;

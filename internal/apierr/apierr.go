@@ -52,8 +52,13 @@ const (
 	// change) by the compile/export/deploy-script paths: the controller's HandleCompilePreview/
 	// HandleStage and the in-browser WASM engine. These are coded at the SOURCE in
 	// internal/compiler + internal/allocator and flow through the writeCodedOr relay;
-	// CodeCompileFailed is the relay's 422 fallback for any compile error not coded at the source
-	// (e.g. a schema/semantic validation failure reaching compile).
+	// CodeTopologyValidationFailed is the HTTP envelope for a structured compiler validation
+	// failure. Its params preserve the first validator finding as field, validation_code,
+	// validation_message, and validation_param_<name> entries so the panel can localize the
+	// validator code without collapsing the validator and HTTP code namespaces.
+	// CodeCompileFailed remains available for explicitly chosen compile-only fallback surfaces;
+	// controller deploy handlers do not use it for unknown operational failures.
+	CodeTopologyValidationFailed  Code = "topology_validation_failed"
 	CodeCompileFailed             Code = "compile_failed"
 	CodeTransitPoolExhausted      Code = "compile_transit_pool_exhausted"
 	CodeTransitCIDRInvalid        Code = "compile_transit_cidr_invalid"
@@ -93,6 +98,7 @@ const (
 	CodeReqUnsupportedAlg              Code = "req_unsupported_alg"
 	CodeTopologyVersionNotFound        Code = "topology_version_not_found"
 	CodeNoTopologyStored               Code = "no_topology_stored"
+	CodeTopologyChanged                Code = "topology_changed"
 	CodeKeystoneNoSignedManifest       Code = "keystone_no_signed_manifest"
 	CodeNoStagedManifest               Code = "no_staged_manifest"
 	CodeNoPinnedCredential             Code = "no_pinned_credential"
@@ -100,6 +106,7 @@ const (
 	CodeManifestSignatureInvalid       Code = "manifest_signature_invalid"
 	CodeStageFailed                    Code = "stage_failed"
 	CodeTelemetryProbesRequireKeystone Code = "telemetry_probes_require_keystone"
+	CodeTelemetryPolicyUpgradeRequired Code = "telemetry_policy_upgrade_required"
 	// CodeManualNodeInvalid rejects a stage whose topology carries a manual (deployment_mode=manual)
 	// node that is not deployable: no WireGuard public key, or a key that duplicates another manual
 	// node's or collides with an enrolled node's. A manual node is hand-deployed with a pre-known key
@@ -180,6 +187,7 @@ var registry = map[Code]def{
 	CodeKeygenPinnedNoPrivkey: {"Node {node} has a pinned WireGuard public key but no matching private key: the stateless compiler cannot reconstruct it. Paste the in-use private key from that host's /etc/wireguard/<interface>.conf, or clear BOTH key fields to rotate.", http.StatusBadRequest},
 	CodeKeygenGenerateFailed:  {"Failed to generate a WireGuard key for node {node}: {detail}", http.StatusInternalServerError},
 
+	CodeTopologyValidationFailed:  {"Topology validation failed at {field}: {validation_message}", http.StatusUnprocessableEntity},
 	CodeCompileFailed:             {"Compilation failed. Check the topology and try again.", http.StatusUnprocessableEntity},
 	CodeTransitPoolExhausted:      {"The transit address pool for CIDR {cidr} is exhausted; widen the transit CIDR or reduce the number of links between these nodes.", http.StatusUnprocessableEntity},
 	CodeTransitCIDRInvalid:        {"The transit CIDR {cidr} is invalid: {detail}", http.StatusUnprocessableEntity},
@@ -213,13 +221,15 @@ var registry = map[Code]def{
 	CodeReqUnsupportedAlg:              {"Unsupported algorithm {alg}.", http.StatusBadRequest},
 	CodeTopologyVersionNotFound:        {"No such retained topology version (it may have been pruned).", http.StatusNotFound},
 	CodeNoTopologyStored:               {"No topology has been stored yet.", http.StatusNotFound},
+	CodeTopologyChanged:                {"The topology changed while deployment was being prepared. Review the latest design and retry deployment.", http.StatusConflict},
 	CodeKeystoneNoSignedManifest:       {"The keystone is enabled but no signed membership manifest has been promoted to serve yet; sign and promote a deploy under the pinned credential. Nodes keep their current config and retry.", http.StatusConflict},
 	CodeNoStagedManifest:               {"No staged membership manifest; stage a deploy before signing.", http.StatusNotFound},
 	CodeNoPinnedCredential:             {"No operator credential is pinned; pin one before signing.", http.StatusPreconditionFailed},
 	CodeStagedManifestMismatch:         {"The submitted manifest does not match the current staged manifest; re-fetch and re-sign.", http.StatusConflict},
 	CodeManifestSignatureInvalid:       {"The manifest signature could not be verified against the pinned credential.", http.StatusBadRequest},
 	CodeStageFailed:                    {"Staging or promoting the deployment failed.", http.StatusUnprocessableEntity},
-	CodeTelemetryProbesRequireKeystone: {"Active telemetry probes require a pinned off-host keystone. Enroll and pin an operator keystone, then retry deployment.", http.StatusPreconditionFailed},
+	CodeTelemetryProbesRequireKeystone: {"Active telemetry policy requires a pinned off-host keystone. Enroll and pin an operator keystone, then retry deployment.", http.StatusPreconditionFailed},
+	CodeTelemetryPolicyUpgradeRequired: {"Successor telemetry policy requires confirmed agent capabilities on {count} node(s): {nodes}. Upgrade agents first, wait for a fresh heartbeat, then deploy again.", http.StatusPreconditionFailed},
 	CodeManualNodeInvalid:              {"Manual node {node} is invalid: {detail}", http.StatusUnprocessableEntity},
 
 	CodeAgentReleaseRequestInvalid: {"The release-pin request field {field} is invalid.", http.StatusBadRequest},

@@ -1,6 +1,23 @@
+import type { TelemetryProbe } from '../types/topology';
+import {
+  effectiveExpectedStatus,
+  isValidProbeID,
+  isValidProbeURL,
+  probeDestinationInvalid,
+} from './probeResults';
+import {
+  deviceDefinitionsForKind,
+  isDeviceKind,
+  isDeviceSeriesID,
+  type DeviceKind,
+  type DeviceNumericKey,
+} from './deviceTelemetry';
+
+export { DEVICE_NUMERIC_DEFINITIONS } from './deviceTelemetry';
+
 // telemetryHistory.ts — PURE logic for the node-detail telemetry-history charts: the param→query
 // wiring (range preset + granularity → from/to/step), the wire→typed parsing of the additive
-// `GET node-history` response, the Go-duration math the charts need, and the resource/probe
+// `GET node-history` response, the Go-duration math the charts need, and the resource/probe/device
 // wire→series shaping. Deliberately dependency-free and DOM-free so it
 // is pinned directly in telemetryHistory.test.ts without needing a browser DOM.
 //
@@ -24,7 +41,7 @@ export const GRANULARITIES: readonly Granularity[] = ['auto', '30s', '5m', '30m'
 // reads this literal as the frontend authority, while the parser and production renderer each use
 // the derived union in an exhaustive `satisfies Record<...>` registry. A newly charted Go family
 // therefore cannot stop at retention or parsing without making CI red.
-export const HISTORY_CHART_FAMILIES = ['resource', 'probe'] as const;
+export const HISTORY_CHART_FAMILIES = ['resource', 'probe', 'device'] as const;
 export type HistoryChartFamily = typeof HISTORY_CHART_FAMILIES[number];
 
 const MAX_HISTORY_BUCKETS = 1000;
@@ -65,7 +82,7 @@ export interface HistoryBucket {
 }
 
 // ProbeHistoryBucket aggregates completed attempts for one signed probe policy in one time bucket.
-// latencyMS is absent when the bucket had no successful attempt; that is a chart gap, never 0 ms.
+// latencyMS is absent when no completed response carried latency; that is a chart gap, never 0 ms.
 // failureReasons is intentionally an open string map so a newer controller can add a stable reason
 // without making an older panel discard an otherwise valid bucket.
 export interface ProbeHistoryBucket {
@@ -82,16 +99,33 @@ export interface ProbeHistoryBucket {
 }
 
 // ProbeHistorySeries is keyed by the controller's policy identity. The executable destination is
-// repeated so the UI can require an exact id/type/host/port match with the CURRENT design before it
+// repeated so the UI can require an exact typed-destination match with the CURRENT design before it
 // attributes old measurements to a configured probe.
-export interface ProbeHistorySeries {
+interface ProbeHistorySeriesBase {
   seriesId: string;
   id: string;
-  type: 'icmp' | 'tcp';
-  host: string;
-  port?: number;
   intervalMS?: number;
   buckets: ProbeHistoryBucket[];
+}
+
+export type ProbeHistorySeries = ProbeHistorySeriesBase & (
+  | { type: 'icmp'; host: string; port?: never; url?: never; expectedStatus?: never }
+  | { type: 'tcp'; host: string; port: number; url?: never; expectedStatus?: never }
+  | { type: 'url'; url: string; expectedStatus: number; host?: never; port?: never }
+);
+
+export interface DeviceHistoryBucket {
+  t: string;
+  metrics: Partial<Record<DeviceNumericKey, MetricAgg>>;
+}
+
+export interface DeviceHistorySeries {
+  // seriesId is the controller's exact history-series identity. deviceId is the opaque inventory
+  // identity selected by Fleet; neither is raw hardware identity.
+  seriesId: string;
+  deviceId: string;
+  kind: DeviceKind;
+  buckets: DeviceHistoryBucket[];
 }
 
 // NodeHistory is the parsed response. step is the EFFECTIVE step (may be widened from the
@@ -101,13 +135,45 @@ export interface NodeHistory {
   disabled: boolean;
   buckets: HistoryBucket[];
   probes: ProbeHistorySeries[];
+  devices: DeviceHistorySeries[];
 }
 
-export interface HistoryProbeSelector {
+interface HistoryProbeSelectorBase {
   id: string;
-  type: 'icmp' | 'tcp';
-  host: string;
-  port?: number;
+}
+
+export type HistoryProbeSelector = HistoryProbeSelectorBase & (
+  | { type: 'icmp'; host: string; port?: never; url?: never; expectedStatus?: never }
+  | { type: 'tcp'; host: string; port: number; url?: never; expectedStatus?: never }
+  | { type: 'url'; url: string; expectedStatus: number; host?: never; port?: never }
+);
+
+export function configuredHistoryProbeSelector(
+  probe: TelemetryProbe | undefined,
+): HistoryProbeSelector | undefined {
+  if (
+    probe === undefined ||
+    !isValidProbeID(probe.id) ||
+    (probe.type !== 'icmp' && probe.type !== 'tcp' && probe.type !== 'url') ||
+    probeDestinationInvalid(probe)
+  ) return undefined;
+  if (probe.type === 'url') {
+    const expectedStatus = effectiveExpectedStatus(probe);
+    if (!isValidProbeURL(probe.url) || !Number.isSafeInteger(expectedStatus) || expectedStatus < 100 || expectedStatus > 599) {
+      return undefined;
+    }
+    return { id: probe.id, type: 'url', url: probe.url, expectedStatus };
+  }
+  if (probe.type === 'tcp') {
+    if (!Number.isSafeInteger(probe.port) || probe.port < 1 || probe.port > 65535) return undefined;
+    return { id: probe.id, type: 'tcp', host: probe.host, port: probe.port };
+  }
+  return { id: probe.id, type: 'icmp', host: probe.host };
+}
+
+export interface HistoryDeviceSelector {
+  kind: DeviceKind;
+  deviceId: string;
 }
 
 // Request options stay component-local. `probe` is an exact executable-destination selector;
@@ -116,6 +182,7 @@ export interface HistoryProbeSelector {
 export interface NodeHistoryRequestOptions {
   includeProbes?: boolean;
   probe?: HistoryProbeSelector;
+  device?: HistoryDeviceSelector;
   signal?: AbortSignal;
 }
 
@@ -182,7 +249,7 @@ export function historyQueryString(
   from: string,
   to: string,
   step?: string,
-  options: Pick<NodeHistoryRequestOptions, 'includeProbes' | 'probe'> = {},
+  options: Pick<NodeHistoryRequestOptions, 'includeProbes' | 'probe' | 'device'> = {},
 ): string {
   const p = new URLSearchParams({ node: nodeId, from, to });
   if (step) p.set('step', step);
@@ -190,10 +257,22 @@ export function historyQueryString(
   if (options.probe) {
     p.set('probe_id', options.probe.id);
     p.set('probe_type', options.probe.type);
-    p.set('probe_host', options.probe.host);
-    if (options.probe.type === 'tcp' && options.probe.port !== undefined) {
+    if (options.probe.type === 'url') {
+      p.set('probe_url', options.probe.url);
+      p.set('probe_expected_status', String(options.probe.expectedStatus));
+    } else {
+      p.set('probe_host', options.probe.host);
+    }
+    if (options.probe.type === 'tcp') {
       p.set('probe_port', String(options.probe.port));
     }
+  }
+  if (options.device) {
+    p.set('include_devices', 'true');
+    p.set('device_kind', options.device.kind);
+    p.set('device_id', options.device.deviceId);
+  } else {
+    p.set('include_devices', 'false');
   }
   return p.toString();
 }
@@ -335,7 +414,6 @@ function parseProbeBucket(raw: unknown): ProbeHistoryBucket | null {
   const latency = parseAgg(o.latency_ms);
   if (
     latency &&
-    successes > 0 &&
     latency.avg >= 0 &&
     (latency.min === undefined || latency.min >= 0) &&
     (latency.max === undefined || latency.max >= 0)
@@ -354,33 +432,122 @@ function parseProbeSeries(raw: unknown): ProbeHistorySeries | null {
     typeof o.id !== 'string' ||
     o.id.length === 0 ||
     o.id.length > 63 ||
-    (o.type !== 'icmp' && o.type !== 'tcp') ||
+    (o.type !== 'icmp' && o.type !== 'tcp' && o.type !== 'url')
+  ) {
+    return null;
+  }
+  const common = {
+    seriesId: o.series_id,
+    id: o.id,
+    intervalMS: parseProbeIntervalMS(o.interval_ms),
+    buckets: parseAccepted(o.buckets, MAX_HISTORY_BUCKETS, parseProbeBucket),
+  };
+  if (o.type === 'url') {
+    const expectedStatus = parseCount(o.expected_status);
+    if (
+      o.host !== undefined ||
+      o.port !== undefined ||
+      !isValidProbeURL(o.url) ||
+      expectedStatus === null || expectedStatus < 100 || expectedStatus > 599
+    ) {
+      return null;
+    }
+    return {
+      seriesId: common.seriesId,
+      id: common.id,
+      type: 'url',
+      url: o.url,
+      expectedStatus,
+      ...(common.intervalMS === undefined ? {} : { intervalMS: common.intervalMS }),
+      buckets: common.buckets,
+    };
+  }
+  if (
+    o.url !== undefined ||
+    o.expected_status !== undefined ||
     typeof o.host !== 'string' ||
     o.host.length === 0 ||
     o.host.length > 253
   ) {
     return null;
   }
-  let port: number | undefined;
   if (o.type === 'tcp') {
     const parsed = parseCount(o.port);
     if (parsed === null || parsed < 1 || parsed > 65535) return null;
-    port = parsed;
-  } else if (o.port !== undefined) {
-    return null;
+    return {
+      seriesId: common.seriesId,
+      id: common.id,
+      type: 'tcp',
+      host: o.host,
+      port: parsed,
+      ...(common.intervalMS === undefined ? {} : { intervalMS: common.intervalMS }),
+      buckets: common.buckets,
+    };
   }
+  if (o.port !== undefined) return null;
   // Cadence is advisory chart metadata. A newer controller value outside the currently understood
   // range must not discard a valid exact series; degrade it to "unknown" and use current policy.
-  const intervalMS = parseProbeIntervalMS(o.interval_ms);
-  const buckets = parseAccepted(o.buckets, MAX_HISTORY_BUCKETS, parseProbeBucket);
   return {
-    seriesId: o.series_id,
-    id: o.id,
-    type: o.type,
+    seriesId: common.seriesId,
+    id: common.id,
+    type: 'icmp',
     host: o.host,
-    ...(port === undefined ? {} : { port }),
-    ...(intervalMS === undefined ? {} : { intervalMS }),
-    buckets,
+    ...(common.intervalMS === undefined ? {} : { intervalMS: common.intervalMS }),
+    buckets: common.buckets,
+  };
+}
+
+function parseDeviceBucket(raw: unknown, kind: DeviceKind): DeviceHistoryBucket | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const wire = raw as Record<string, unknown>;
+  if (typeof wire.t !== 'string' || Number.isNaN(Date.parse(wire.t))) return null;
+  if (!wire.metrics || typeof wire.metrics !== 'object' || Array.isArray(wire.metrics)) return null;
+  const allowed = new Map(
+    deviceDefinitionsForKind(kind).map((definition) => [definition.key, definition]),
+  );
+  const metrics: Partial<Record<DeviceNumericKey, MetricAgg>> = {};
+  let accepted = 0;
+  for (const [rawKey, rawAgg] of Object.entries(wire.metrics as Record<string, unknown>)) {
+    const definition = allowed.get(rawKey as DeviceNumericKey);
+    if (!definition) return null;
+    const aggregate = parseAgg(rawAgg);
+    if (
+      !aggregate ||
+      aggregate.avg < 0 ||
+      (aggregate.min !== undefined && aggregate.min < 0) ||
+      (aggregate.max !== undefined && aggregate.max < 0) ||
+      (definition.unit === '%' && (
+        aggregate.avg > 100 ||
+        (aggregate.min !== undefined && aggregate.min > 100) ||
+        (aggregate.max !== undefined && aggregate.max > 100)
+      ))
+    ) {
+      return null;
+    }
+    metrics[definition.key] = aggregate;
+    accepted++;
+  }
+  return accepted === 0 ? null : { t: wire.t, metrics };
+}
+
+function parseDeviceSeries(raw: unknown): DeviceHistorySeries | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const wire = raw as Record<string, unknown>;
+  if (
+    !isDeviceSeriesID(wire.series_id) ||
+    !isDeviceSeriesID(wire.device_id) ||
+    !isDeviceKind(wire.kind) ||
+    !Array.isArray(wire.buckets)
+  ) {
+    return null;
+  }
+  const kind = wire.kind;
+  return {
+    seriesId: wire.series_id,
+    deviceId: wire.device_id,
+    kind,
+    buckets: parseAccepted(wire.buckets, MAX_HISTORY_BUCKETS, (candidate) =>
+      parseDeviceBucket(candidate, kind)),
   };
 }
 
@@ -396,6 +563,13 @@ const HISTORY_CHART_PARSERS = {
   probe: (wire) => ({
     probes: parseAccepted(wire.probes, MAX_PROBE_SERIES, parseProbeSeries),
   }),
+  device: (wire) => ({
+    // The API has no broad device-history mode: an exact request can produce zero or one series.
+    // Reject an impossible multi-series response as a whole instead of silently selecting a row.
+    devices: Array.isArray(wire.devices) && wire.devices.length <= 1
+      ? parseAccepted(wire.devices, 1, parseDeviceSeries)
+      : [],
+  }),
 } satisfies Record<HistoryChartFamily, HistoryFamilyParser>;
 
 // parseNodeHistory maps the raw JSON to NodeHistory. Defensive at every layer (a garbled
@@ -410,6 +584,7 @@ export function parseNodeHistory(raw: unknown): NodeHistory {
     disabled: wire.disabled === true,
     buckets: [],
     probes: [],
+    devices: [],
   };
   for (const family of HISTORY_CHART_FAMILIES) {
     Object.assign(history, HISTORY_CHART_PARSERS[family](wire));
@@ -455,6 +630,14 @@ export function metricSeries(
   pick: (b: HistoryBucket) => MetricAgg | undefined,
 ): ChartPoint[] {
   return aggregateSeries(buckets, stepMs, pick);
+}
+
+export function deviceMetricSeries(
+  buckets: readonly DeviceHistoryBucket[],
+  stepMs: number,
+  key: DeviceNumericKey,
+): ChartPoint[] {
+  return aggregateSeries(buckets, stepMs, (bucket) => bucket.metrics[key]);
 }
 
 function aggregateProbeSeries(
@@ -554,13 +737,18 @@ export function summarizeProbeFailures(buckets: readonly ProbeHistoryBucket[]): 
 }
 
 export function probeHistoryMatchesPolicy(
-  probe: { id: string; type: 'icmp' | 'tcp'; host: string; port?: number },
+  probe: TelemetryProbe,
   series: ProbeHistorySeries,
 ): boolean {
-  return probe.id === series.id &&
-    probe.type === series.type &&
-    probe.host === series.host &&
-    (probe.port ?? undefined) === (series.port ?? undefined);
+  if (probe.id !== series.id || probe.type !== series.type) return false;
+  if (probe.type === 'url') {
+    return series.type === 'url' && probe.url === series.url &&
+      (probe.expected_status || 200) === series.expectedStatus;
+  }
+  if (probe.type === 'tcp') {
+    return series.type === 'tcp' && probe.host === series.host && probe.port === series.port;
+  }
+  return series.type === 'icmp' && probe.host === series.host;
 }
 
 export interface LatestRequestCoordinator<Query> {

@@ -353,6 +353,15 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 				result.AddError(prefix+".telemetry_probes", CodeNodeTelemetryProbesInvalid, P{"detail", err.Error()})
 			}
 		}
+		if node.TelemetryDevices != nil {
+			if node.IsManual() {
+				result.AddError(prefix+".telemetry_devices", CodeNodeTelemetryDevicesInvalid, P{"detail", "automatic device telemetry requires an agent-managed source node"})
+			} else if err := probepolicy.ValidateDevicePolicy(&probepolicy.DevicePolicy{
+				Mode: probepolicy.DeviceMode(node.TelemetryDevices.Mode),
+			}); err != nil {
+				result.AddError(prefix+".telemetry_devices", CodeNodeTelemetryDevicesInvalid, P{"detail", err.Error()})
+			}
+		}
 
 		// Platform (optional; unsupported values are a warning, not an error)
 		if node.Platform != "" {

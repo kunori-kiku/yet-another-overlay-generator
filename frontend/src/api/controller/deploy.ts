@@ -5,7 +5,12 @@
 import { postJSON, type ControllerConfig } from './transport';
 import type { CompileResponse } from '../../types/topology';
 import type { StageResult } from '../../types/controller';
-import type { DeployPreview, DeployPreviewNode, DeployForceArg } from '../../lib/deployPreview';
+import type {
+  DeployPreview,
+  DeployPreviewNode,
+  DeployForceArg,
+  TelemetryPolicyDeployMode,
+} from '../../lib/deployPreview';
 
 interface StageResponseJSON {
   staged: string[] | null;
@@ -13,6 +18,7 @@ interface StageResponseJSON {
   // older controller → mapped to [] so the result type field is always present.
   unchanged: string[] | null;
   skipped_unenrolled: string[] | null;
+  telemetry_policy_omitted_node_ids?: string[] | null;
   generation: number;
 }
 
@@ -28,6 +34,7 @@ interface deployPreviewResponseJSON {
   keystone_full_restage: boolean;
   nodes: deployPreviewNodeJSON[] | null;
   skipped_unenrolled: string[] | null;
+  telemetry_policy_omitted_node_ids?: string[] | null;
 }
 
 interface GenerationResponseJSON {
@@ -35,7 +42,7 @@ interface GenerationResponseJSON {
 }
 
 // compilePreview is a read-only, server-authoritative compile preview (operator-only): it
-// POSTs the current design, the server renders the enrolled subgraph (no staging, no
+// POSTs the current design, the server renders the deployment-ready subgraph (no staging, no
 // persistence, no side effects), and returns the configs plus the IDs of skipped (not yet
 // enrolled) nodes. Zero-knowledge — the rendered wg configs contain only placeholder private
 // keys. The response is the air-gap CompileResponse shape plus skipped_unenrolled.
@@ -47,26 +54,40 @@ export async function compilePreview(
   return (await res.json()) as CompileResponse;
 }
 
-// stage compiles the enrolled subgraph and stages it into the next generation (operator-only). An
+// stage compiles the deployment-ready subgraph and stages it into the next generation (operator-only). An
 // OPTIONAL force argument (plan-6) re-stages nodes even when their digest is unchanged: forceAll
 // re-stages the whole fleet, forceNodes re-stages named nodes — the escape hatch around the plan-5
 // delta-skip. No force (the default) ⇒ an empty body (a plain delta stage). The result now carries
 // the delta-skipped `unchanged` set alongside `staged`.
-export async function stage(cfg: ControllerConfig, force?: DeployForceArg): Promise<StageResult> {
-  // Empty body when no force is requested (the backend decodes an empty body as "no force"); only a
-  // real force serializes the force_all / force_nodes body.
-  let body = '';
+export async function stage(
+  cfg: ControllerConfig,
+  force?: DeployForceArg,
+  mode?: TelemetryPolicyDeployMode
+): Promise<StageResult> {
+  // Empty body when neither force nor the explicit phase-one mode is requested (the backend decodes
+  // an empty body as the legacy/default stage). Keep `normal` omitted too: old clients and ordinary
+  // deploys retain their exact request shape.
+  const request: {
+    force_all?: true;
+    force_nodes?: string[];
+    telemetry_policy_mode?: TelemetryPolicyDeployMode;
+  } = {};
   if (force?.forceAll) {
-    body = JSON.stringify({ force_all: true });
+    request.force_all = true;
   } else if (force?.forceNodes && force.forceNodes.length > 0) {
-    body = JSON.stringify({ force_nodes: force.forceNodes });
+    request.force_nodes = force.forceNodes;
   }
+  if (mode === 'upgrade-agents-first') {
+    request.telemetry_policy_mode = mode;
+  }
+  const body = Object.keys(request).length > 0 ? JSON.stringify(request) : '';
   const res = await postJSON(cfg, 'stage', body);
   const data = (await res.json()) as StageResponseJSON;
   return {
     staged: data.staged ?? [],
     unchanged: data.unchanged ?? [],
     skippedUnenrolled: data.skipped_unenrolled ?? [],
+    telemetryPolicyOmittedNodeIDs: data.telemetry_policy_omitted_node_ids ?? [],
     generation: data.generation,
   };
 }
@@ -81,8 +102,18 @@ export async function stage(cfg: ControllerConfig, force?: DeployForceArg): Prom
 // persists it (a transient operator action — the stripLiveTelemetry custody rule). topoJSON is the
 // serialized public-keys-only model.Topology, posted verbatim exactly like compilePreview /
 // updateTopology (the caller strips private keys first).
-export async function deployPreview(cfg: ControllerConfig, topoJSON: string): Promise<DeployPreview> {
-  const res = await postJSON(cfg, 'deploy-preview', topoJSON);
+export async function deployPreview(
+  cfg: ControllerConfig,
+  topoJSON: string,
+  mode?: TelemetryPolicyDeployMode
+): Promise<DeployPreview> {
+  // Keep the normal/default URL byte-compatible. Only the deliberate phase-one action adds the
+  // query parameter; the raw topology remains the verbatim POST body in both modes.
+  const route =
+    mode === 'upgrade-agents-first'
+      ? `deploy-preview?telemetry_policy_mode=${encodeURIComponent(mode)}`
+      : 'deploy-preview';
+  const res = await postJSON(cfg, route, topoJSON);
   const d = (await res.json()) as deployPreviewResponseJSON;
   const nodes: DeployPreviewNode[] = (d.nodes ?? []).map((n) => ({
     nodeId: n.node_id,
@@ -93,6 +124,7 @@ export async function deployPreview(cfg: ControllerConfig, topoJSON: string): Pr
     keystoneFullRestage: d.keystone_full_restage,
     nodes,
     skippedUnenrolled: d.skipped_unenrolled ?? [],
+    telemetryPolicyOmittedNodeIDs: d.telemetry_policy_omitted_node_ids ?? [],
   };
 }
 

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/devicemetric"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/probemetric"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrymetric"
 )
@@ -31,6 +32,15 @@ func sampleMetrics(cpu *float64, load1 float64) map[string]json.RawMessage {
 func encodedProbeMetric(t *testing.T, results ...probemetric.Result) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(results)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func encodedDeviceSamplesMetric(t *testing.T, samples ...devicemetric.Sample) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(devicemetric.SamplesMetric{Samples: samples})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,6 +72,9 @@ func (p *pauseAfterUnlockKV) withLock(fn func() error) error {
 }
 
 func TestTelemetryHistoryProjectorCatalogParity(t *testing.T) {
+	if _, exists := telemetryHistoryProjectors[telemetrymetric.DeviceInventory.Key]; exists {
+		t.Fatal("categorical device_inventory must remain live-only and have no history projector")
+	}
 	if err := validateTelemetryHistoryProjectorRegistry(); err != nil {
 		t.Fatalf("projector registry validation: %v", err)
 	}
@@ -71,10 +84,28 @@ func TestTelemetryHistoryProjectorCatalogParity(t *testing.T) {
 		ID: "fixture", Type: "icmp", Host: "fixture.example", Status: probemetric.StatusSuccess,
 		LatencyMS: &latency, CheckedAt: base.Format(time.RFC3339Nano), IntervalMS: 30_000,
 	}
+	blockID := devicemetric.SeriesID(devicemetric.KindBlockDevice, []byte("fixture-block"))
+	filesystemID := devicemetric.SeriesID(devicemetric.KindFilesystem, []byte("fixture-filesystem"))
+	gpuID := devicemetric.SeriesID(devicemetric.KindGPU, []byte("fixture-gpu"))
+	deviceFixture := encodedDeviceSamplesMetric(t,
+		devicemetric.Sample{SeriesID: blockID, Kind: devicemetric.KindBlockDevice, Values: map[devicemetric.NumericKey]float64{
+			devicemetric.DiskReadBytesPerSecond:  0,
+			devicemetric.DiskWriteBytesPerSecond: 20,
+			devicemetric.DiskIOBusyPct:           30,
+		}},
+		devicemetric.Sample{SeriesID: filesystemID, Kind: devicemetric.KindFilesystem, Values: map[devicemetric.NumericKey]float64{
+			devicemetric.DiskFilesystemUsedPct: 40,
+		}},
+		devicemetric.Sample{SeriesID: gpuID, Kind: devicemetric.KindGPU, Values: map[devicemetric.NumericKey]float64{
+			devicemetric.GPUUtilizationPct: 50,
+			devicemetric.GPUVRAMUsedPct:    60,
+		}},
+	)
 	fixtures := map[string]json.RawMessage{
-		telemetrymetric.Resource.Key:     sampleMetrics(&cpu, 1)[telemetrymetric.Resource.Key],
-		telemetrymetric.ProbeSamples.Key: encodedProbeMetric(t, probe),
-		telemetrymetric.ProbeResults.Key: encodedProbeMetric(t, probe),
+		telemetrymetric.Resource.Key:      sampleMetrics(&cpu, 1)[telemetrymetric.Resource.Key],
+		telemetrymetric.ProbeSamples.Key:  encodedProbeMetric(t, probe),
+		telemetrymetric.ProbeResults.Key:  encodedProbeMetric(t, probe),
+		telemetrymetric.DeviceSamples.Key: deviceFixture,
 	}
 	charted := make(map[string]telemetrymetric.ChartFamily)
 	for _, definition := range telemetrymetric.Charted() {
@@ -102,6 +133,27 @@ func TestTelemetryHistoryProjectorCatalogParity(t *testing.T) {
 		case telemetrymetric.ChartFamilyProbe:
 			if projection.resource != nil || len(projection.probes) == 0 || record.Resource != nil || len(record.ProbeAttempts) == 0 {
 				t.Errorf("probe fixture %q did not reach only the probe family: projection=%+v record=%+v", definition.Key, projection, record)
+			}
+		case telemetrymetric.ChartFamilyDevice:
+			if projection.resource != nil || len(projection.probes) != 0 || len(projection.devices) != 3 ||
+				record.Resource != nil || len(record.ProbeAttempts) != 0 || len(record.DeviceSamples) != 3 {
+				t.Errorf("device fixture %q did not reach only the device family: projection=%+v record=%+v", definition.Key, projection, record)
+			}
+			seenKeys := make(map[devicemetric.NumericKey]struct{})
+			for _, sample := range record.DeviceSamples {
+				if sample.TS != base.UTC() {
+					t.Errorf("device fixture timestamp = %v, want %v", sample.TS, base.UTC())
+				}
+				wantSeries, err := devicemetric.HistorySeriesID(sample.Kind, sample.DeviceID)
+				if err != nil || sample.SeriesID != wantSeries {
+					t.Errorf("device fixture series = %q, %v; want %q", sample.SeriesID, err, wantSeries)
+				}
+				for key := range sample.Values {
+					seenKeys[key] = struct{}{}
+				}
+			}
+			if len(seenKeys) != len(devicemetric.NumericDefinitions()) {
+				t.Errorf("device fixture numeric keys = %d, want all %d", len(seenKeys), len(devicemetric.NumericDefinitions()))
 			}
 		default:
 			t.Errorf("runtime projector fixture has no assertion for chart family %q", definition.ChartFamily)
@@ -137,6 +189,96 @@ func TestTelemetryHistoryProjectorCatalogParity(t *testing.T) {
 	}
 	if len(telemetryHistoryFamilyAccumulators) != len(families) {
 		t.Errorf("history accumulator/catalog family cardinality = %d/%d, want exact parity", len(telemetryHistoryFamilyAccumulators), len(families))
+	}
+}
+
+func TestDeviceHistoryProjectionIsStrictAndPreservesZeroAsAReading(t *testing.T) {
+	at := time.Date(2026, 7, 17, 1, 2, 3, 0, time.FixedZone("fixture", 10*60*60))
+	deviceID := devicemetric.SeriesID(devicemetric.KindBlockDevice, []byte("disk"))
+	raw := encodedDeviceSamplesMetric(t, devicemetric.Sample{
+		SeriesID: deviceID,
+		Kind:     devicemetric.KindBlockDevice,
+		Values:   map[devicemetric.NumericKey]float64{devicemetric.DiskReadBytesPerSecond: 0},
+	})
+	samples := deviceHistorySamplesFromRaw(raw, at)
+	if len(samples) != 1 || samples[0].TS != at.UTC() {
+		t.Fatalf("device history projection = %+v, want one UTC sample", samples)
+	}
+	if value, present := samples[0].Values[devicemetric.DiskReadBytesPerSecond]; !present || value != 0 {
+		t.Fatalf("valid zero reading = %v/%v, want 0/true", value, present)
+	}
+	if _, present := samples[0].Values[devicemetric.DiskWriteBytesPerSecond]; present {
+		t.Fatal("missing device reading was fabricated instead of remaining a gap")
+	}
+
+	for name, malformed := range map[string]json.RawMessage{
+		"unknown numeric key": []byte(fmt.Sprintf(`{"samples":[{"series_id":%q,"kind":"block_device","values":{"future":1}}]}`, deviceID)),
+		"unknown envelope":    append(append(json.RawMessage{}, raw[:len(raw)-1]...), []byte(`,"future":true}`)...),
+		"trailing value":      append(append(json.RawMessage{}, raw...), []byte(` {}`)...),
+	} {
+		if projected := deviceHistorySamplesFromRaw(malformed, at); len(projected) != 0 {
+			t.Errorf("%s projected malformed device samples: %+v", name, projected)
+		}
+	}
+
+	record := telemetryHistoryRecord{RecordedAt: at.UTC(), DeviceSamples: samples}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope["recorded_at"]) == 0 || len(envelope["ts"]) != 0 {
+		t.Fatalf("device-only JSONL shape = %s, want recorded_at and no legacy resource ts", encoded)
+	}
+}
+
+func TestDeviceHistoryUsesCollectionCadenceAndDedupesCachedHeartbeats(t *testing.T) {
+	h := newTelemetryHistory("", 100, nil)
+	base := time.Date(2026, 7, 17, 2, 0, 0, 0, time.UTC)
+	deviceID := devicemetric.SeriesID(devicemetric.KindGPU, []byte("cadence-gpu"))
+	metric := func(sampledAt time.Time, value float64) map[string]json.RawMessage {
+		raw, err := json.Marshal(devicemetric.SamplesMetric{
+			Samples: []devicemetric.Sample{{
+				SeriesID: deviceID, Kind: devicemetric.KindGPU,
+				Values: map[devicemetric.NumericKey]float64{devicemetric.GPUUtilizationPct: value},
+			}},
+			SampledAt: sampledAt.Format(time.RFC3339Nano),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return map[string]json.RawMessage{telemetrymetric.DeviceSamples.Key: raw}
+	}
+
+	// A faster heartbeat repeats the same live sample; only the actual collection is retained.
+	h.appendMetrics("tn", "n1", metric(base, 10), base.Add(5*time.Second), 10*time.Second)
+	h.appendMetrics("tn", "n1", metric(base, 10), base.Add(15*time.Second), 10*time.Second)
+	// A completion-triggered beat captures the next collection even though an ordinary upload could
+	// be slower than the device cadence.
+	h.appendMetrics("tn", "n1", metric(base.Add(30*time.Second), 20), base.Add(31*time.Second), time.Minute)
+	seriesID, err := devicemetric.HistorySeriesID(devicemetric.KindGPU, deviceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := h.querySnapshotFilteredContext(
+		context.Background(), "tn", "n1", base.Add(-time.Second), base.Add(time.Minute),
+		TelemetryHistoryQueryOptions{DeviceSeriesID: seriesID},
+	)
+	if err != nil || len(snapshot.Devices) != 2 {
+		t.Fatalf("collection-cadence history = %+v err=%v, want two real observations", snapshot.Devices, err)
+	}
+	if !snapshot.Devices[0].TS.Equal(base) || !snapshot.Devices[1].TS.Equal(base.Add(30*time.Second)) {
+		t.Fatalf("device timestamps follow uploads instead of collections: %+v", snapshot.Devices)
+	}
+
+	// An unbounded node clock is not allowed to manufacture a future collection.
+	if projected := deviceHistorySamplesFromRaw(
+		metric(base.Add(24*time.Hour), 30)[telemetrymetric.DeviceSamples.Key], base,
+	); len(projected) != 0 {
+		t.Fatalf("future collection timestamp projected: %+v", projected)
 	}
 }
 
@@ -182,6 +324,65 @@ func TestProbeHistoryProjectsSamplesAndRC9FallbackWithoutDuplicates(t *testing.T
 	}
 	if got[1].LatencyMS != nil || got[1].FailureReason != probemetric.FailureConnectionRefused {
 		t.Fatalf("failure manufactured latency or lost reason: %+v", got[1])
+	}
+}
+
+func TestProbeHistoryURLMismatchSurvivesRestartWithoutActualStatus(t *testing.T) {
+	dir := t.TempDir()
+	h := newTelemetryHistory(dir, 100, nil)
+	base := time.Date(2026, 7, 17, 10, 0, 0, 0, time.UTC)
+	latency := 18.75
+	resultFor := func(expectedStatus int) probemetric.Result {
+		return probemetric.Result{
+			ID: "health", Type: "url", URL: "https://service.example/ready",
+			ExpectedStatus: expectedStatus, ActualStatus: 500,
+			Status: probemetric.StatusFailure, LatencyMS: &latency,
+			CheckedAt:     base.Format(time.RFC3339Nano),
+			FailureReason: probemetric.FailureUnexpectedStatus, IntervalMS: 30_000,
+		}
+	}
+	expects204 := resultFor(204)
+	expects200 := resultFor(200)
+	h.appendMetrics("tn", "n1", map[string]json.RawMessage{
+		telemetrymetric.ProbeSamples.Key: encodedProbeMetric(t, expects204, expects200),
+		// The latest snapshot repeats one exact attempt; it must not survive as a duplicate.
+		telemetrymetric.ProbeResults.Key: encodedProbeMetric(t, expects204),
+	}, base, 30*time.Second)
+	h.flushOnce()
+
+	path, err := h.nodeFile("tn", "n1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"actual_status"`) {
+		t.Fatalf("categorical actual status leaked into durable history: %s", raw)
+	}
+	if !strings.Contains(string(raw), `"expected_status":204`) || !strings.Contains(string(raw), `"unexpected_status"`) {
+		t.Fatalf("durable URL identity/outcome missing: %s", raw)
+	}
+
+	restarted := newTelemetryHistory(dir, 100, nil)
+	got, err := restarted.queryProbes("tn", "n1", base.Add(-time.Second), base.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("reloaded URL histories = %d, want two exact expected-status series: %+v", len(got), got)
+	}
+	seen := map[int]bool{}
+	for _, sample := range got {
+		seen[sample.ExpectedStatus] = true
+		if sample.URL != expects204.URL || sample.Status != probemetric.StatusFailure ||
+			sample.FailureReason != probemetric.FailureUnexpectedStatus || sample.LatencyMS == nil || *sample.LatencyMS != latency {
+			t.Fatalf("reloaded URL mismatch lost retained chart data: %+v", sample)
+		}
+	}
+	if !seen[200] || !seen[204] || got[0].SeriesID == got[1].SeriesID {
+		t.Fatalf("expected status did not separate URL series: %+v", got)
 	}
 }
 
@@ -542,6 +743,188 @@ func TestHistory_QuerySeesInflightFlushExactlyOnce(t *testing.T) {
 	assertLoads("after completion")
 }
 
+func TestHistory_QueryRetriesAcrossInflightDiskCommit(t *testing.T) {
+	dir := t.TempDir()
+	h := newTelemetryHistory(dir, 100, nil)
+	base := time.Unix(1000, 0).UTC()
+	for i := 0; i < 90; i++ {
+		h.append("tn", "n1", ResourceSample{TS: base.Add(time.Duration(i) * time.Second), Load1: float64(i)})
+	}
+	h.flushOnce()
+	for i := 90; i < 100; i++ {
+		h.append("tn", "n1", ResourceSample{TS: base.Add(time.Duration(i) * time.Second), Load1: float64(i)})
+	}
+
+	writeStarted := make(chan struct{})
+	allowWrite := make(chan struct{})
+	flushDone := make(chan struct{})
+	writeBatch := h.writeBatch
+	h.writeBatch = func(tenant TenantID, nodeID string, samples []telemetryHistoryRecord, cap int) error {
+		close(writeStarted)
+		<-allowWrite
+		return writeBatch(tenant, nodeID, samples, cap)
+	}
+	go func() {
+		h.flushOnce()
+		close(flushDone)
+	}()
+	select {
+	case <-writeStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("flush did not drain the ten-record batch")
+	}
+
+	querySnapshotted := make(chan struct{})
+	allowDiskRead := make(chan struct{})
+	var pauseOnce sync.Once
+	h.beforeDiskRead = func() {
+		pauseOnce.Do(func() {
+			close(querySnapshotted)
+			<-allowDiskRead
+		})
+	}
+	type queryResult struct {
+		samples []ResourceSample
+		err     error
+	}
+	queryDone := make(chan queryResult, 1)
+	go func() {
+		samples, err := h.query("tn", "n1", base.Add(-time.Second), base.Add(2*time.Minute))
+		queryDone <- queryResult{samples: samples, err: err}
+	}()
+	select {
+	case <-querySnapshotted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("query did not snapshot the in-flight suffix")
+	}
+
+	// Commit and clear the exact ten records after the query reserved ten volatile slots but before
+	// it scans disk. Without the flush epoch retry, the now-duplicated ten consume those reserved disk
+	// slots and only 90 of the retained 100 observations are returned.
+	close(allowWrite)
+	select {
+	case <-flushDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("flush did not commit the in-flight suffix")
+	}
+	close(allowDiskRead)
+	var result queryResult
+	select {
+	case result = <-queryDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("query did not retry after the flush transition")
+	}
+	if result.err != nil || len(result.samples) != 100 {
+		t.Fatalf("query across commit = %d samples (%v), want all 100", len(result.samples), result.err)
+	}
+	if result.samples[0].Load1 != 0 || result.samples[99].Load1 != 99 {
+		t.Fatalf("query across commit endpoints = %v/%v, want 0/99", result.samples[0].Load1, result.samples[99].Load1)
+	}
+}
+
+func TestHistory_QueryRetriesAcrossCapReduction(t *testing.T) {
+	dir := t.TempDir()
+	h := newTelemetryHistory(dir, 100, nil)
+	base := time.Unix(2000, 0).UTC()
+	for i := 0; i < 90; i++ {
+		h.append("tn", "n1", ResourceSample{TS: base.Add(time.Duration(i) * time.Second), Load1: float64(i)})
+	}
+	h.flushOnce()
+	for i := 90; i < 110; i++ {
+		h.append("tn", "n1", ResourceSample{TS: base.Add(time.Duration(i) * time.Second), Load1: float64(i)})
+	}
+
+	querySnapshotted := make(chan struct{})
+	allowDiskRead := make(chan struct{})
+	var pauseOnce sync.Once
+	h.beforeDiskRead = func() {
+		pauseOnce.Do(func() {
+			close(querySnapshotted)
+			<-allowDiskRead
+		})
+	}
+	type queryResult struct {
+		samples []ResourceSample
+		err     error
+	}
+	queryDone := make(chan queryResult, 1)
+	go func() {
+		samples, err := h.query("tn", "n1", base.Add(-time.Second), base.Add(3*time.Minute))
+		queryDone <- queryResult{samples: samples, err: err}
+	}()
+	select {
+	case <-querySnapshotted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("query did not snapshot the old-cap suffix")
+	}
+
+	h.setCap("tn", 10)
+	close(allowDiskRead)
+	var result queryResult
+	select {
+	case result = <-queryDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("query did not retry after the cap transition")
+	}
+	if result.err != nil || len(result.samples) != 10 {
+		t.Fatalf("query across cap reduction = %d samples (%v), want 10", len(result.samples), result.err)
+	}
+	if result.samples[0].Load1 != 100 || result.samples[9].Load1 != 109 {
+		t.Fatalf("query across cap reduction endpoints = %v/%v, want 100/109", result.samples[0].Load1, result.samples[9].Load1)
+	}
+}
+
+func TestHistory_QueryRetriesWhenCapChangesBeforeVolatileSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	h := newTelemetryHistory(dir, 100, nil)
+	base := time.Unix(3000, 0).UTC()
+	for i := 0; i < 100; i++ {
+		h.append("tn", "n1", ResourceSample{TS: base.Add(time.Duration(i) * time.Second), Load1: float64(i)})
+	}
+	h.flushOnce()
+
+	capRead := make(chan struct{})
+	allowSnapshot := make(chan struct{})
+	var pauseOnce sync.Once
+	h.afterQueryCapRead = func() {
+		pauseOnce.Do(func() {
+			close(capRead)
+			<-allowSnapshot
+		})
+	}
+	type queryResult struct {
+		samples []ResourceSample
+		err     error
+	}
+	queryDone := make(chan queryResult, 1)
+	go func() {
+		samples, err := h.query("tn", "n1", base.Add(-time.Second), base.Add(3*time.Minute))
+		queryDone <- queryResult{samples: samples, err: err}
+	}()
+	select {
+	case <-capRead:
+	case <-time.After(3 * time.Second):
+		t.Fatal("query did not read the old cap")
+	}
+
+	// Publish and apply the smaller cap before the query takes history.mu. Its epoch snapshot is
+	// therefore already new; only the explicit end-cap comparison can detect the stale cap value.
+	h.setCap("tn", 10)
+	close(allowSnapshot)
+	var result queryResult
+	select {
+	case result = <-queryDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("query did not retry after the pre-snapshot cap transition")
+	}
+	if result.err != nil || len(result.samples) != 10 {
+		t.Fatalf("query across pre-snapshot cap reduction = %d samples (%v), want 10", len(result.samples), result.err)
+	}
+	if result.samples[0].Load1 != 90 || result.samples[9].Load1 != 99 {
+		t.Fatalf("query across pre-snapshot cap reduction endpoints = %v/%v, want 90/99", result.samples[0].Load1, result.samples[9].Load1)
+	}
+}
+
 func TestHistory_CompactOverCap(t *testing.T) {
 	dir := t.TempDir()
 	h := newTelemetryHistory(dir, 5, nil) // cap 5; the FILE compacts once it passes cap*slack=10 lines
@@ -899,7 +1282,17 @@ func TestHistory_FilteredSnapshotPushesExactSeriesIntoDiskScan(t *testing.T) {
 	dir := t.TempDir()
 	h := newTelemetryHistory(dir, 100, nil)
 	base := time.Unix(60_000, 0).UTC()
-	seriesID := ""
+	probeSeriesID := ""
+	selectedDeviceID := devicemetric.SeriesID(devicemetric.KindGPU, []byte("selected-gpu"))
+	selectedDeviceSeriesID, err := devicemetric.HistorySeriesID(devicemetric.KindGPU, selectedDeviceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherDeviceID := devicemetric.SeriesID(devicemetric.KindGPU, []byte("other-gpu"))
+	otherDeviceSeriesID, err := devicemetric.HistorySeriesID(devicemetric.KindGPU, otherDeviceID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 3; i++ {
 		at := base.Add(time.Duration(i) * time.Second)
 		resource := ResourceSample{TS: at, Load1: float64(i)}
@@ -912,33 +1305,89 @@ func TestHistory_FilteredSnapshotPushesExactSeriesIntoDiskScan(t *testing.T) {
 			}
 			id := probemetric.SeriesID(result)
 			if spec.id == "selected" {
-				seriesID = id
+				probeSeriesID = id
 			}
 			attempts = append(attempts, ProbeHistorySample{
 				SeriesID: id, ID: result.ID, Type: result.Type, Host: result.Host, Status: result.Status,
 				LatencyMS: &latency, CheckedAt: at, IntervalMS: result.IntervalMS,
 			})
 		}
-		h.appendRecord("tn", "n1", telemetryHistoryRecord{Resource: &resource, RecordedAt: at, ProbeAttempts: attempts})
+		h.appendRecord("tn", "n1", telemetryHistoryRecord{
+			Resource: &resource, RecordedAt: at, ProbeAttempts: attempts,
+			DeviceSamples: []DeviceHistorySample{
+				{SeriesID: selectedDeviceSeriesID, DeviceID: selectedDeviceID, Kind: devicemetric.KindGPU, TS: at, Values: map[devicemetric.NumericKey]float64{devicemetric.GPUUtilizationPct: float64(i)}},
+				{SeriesID: otherDeviceSeriesID, DeviceID: otherDeviceID, Kind: devicemetric.KindGPU, TS: at, Values: map[devicemetric.NumericKey]float64{devicemetric.GPUUtilizationPct: float64(i + 50)}},
+			},
+		})
 	}
 	h.flushOnce()
 	from, to := base.Add(-time.Second), base.Add(time.Hour)
 	zero, err := h.querySnapshotFilteredContext(context.Background(), "tn", "n1", from, to, TelemetryHistoryQueryOptions{})
-	if err != nil || len(zero.Resources) != 3 || len(zero.Probes) != 0 {
+	if err != nil || len(zero.Resources) != 3 || len(zero.Probes) != 0 || len(zero.Devices) != 0 {
 		t.Fatalf("zero filtered snapshot = %+v err=%v, want resources only", zero, err)
 	}
-	selected, err := h.querySnapshotFilteredContext(context.Background(), "tn", "n1", from, to, TelemetryHistoryQueryOptions{ProbeSeriesID: seriesID})
-	if err != nil || len(selected.Resources) != 3 || len(selected.Probes) != 3 {
-		t.Fatalf("exact filtered snapshot = %+v err=%v, want three resources and selected probes", selected, err)
+	selected, err := h.querySnapshotFilteredContext(context.Background(), "tn", "n1", from, to, TelemetryHistoryQueryOptions{
+		AllProbeSeries: true, DeviceSeriesID: selectedDeviceSeriesID,
+	})
+	if err != nil || len(selected.Resources) != 3 || len(selected.Probes) != 6 || len(selected.Devices) != 3 {
+		t.Fatalf("exact filtered snapshot = %+v err=%v, want resources, all probes, and one exact device", selected, err)
 	}
-	for _, sample := range selected.Probes {
-		if sample.SeriesID != seriesID || sample.ID != "selected" {
-			t.Fatalf("filtered snapshot leaked another series: %+v", sample)
+	for i, sample := range selected.Devices {
+		if sample.SeriesID != selectedDeviceSeriesID || sample.DeviceID != selectedDeviceID {
+			t.Fatalf("filtered snapshot leaked another device series: %+v", sample)
+		}
+		if got := sample.Values[devicemetric.GPUUtilizationPct]; got != float64(i) {
+			t.Fatalf("selected device value[%d] = %v, want %d (including valid zero)", i, got, i)
+		}
+	}
+	exactProbe, err := h.querySnapshotFilteredContext(context.Background(), "tn", "n1", from, to, TelemetryHistoryQueryOptions{ProbeSeriesID: probeSeriesID})
+	if err != nil || len(exactProbe.Probes) != 3 || len(exactProbe.Devices) != 0 {
+		t.Fatalf("exact probe snapshot = %+v err=%v, want only the selected probe", exactProbe, err)
+	}
+	for _, sample := range exactProbe.Probes {
+		if sample.SeriesID != probeSeriesID || sample.ID != "selected" {
+			t.Fatalf("filtered snapshot leaked another probe series: %+v", sample)
 		}
 	}
 	all, err := h.querySnapshot("tn", "n1", from, to)
-	if err != nil || len(all.Probes) != 6 {
-		t.Fatalf("legacy unfiltered snapshot probes = %d err=%v, want 6", len(all.Probes), err)
+	if err != nil || len(all.Probes) != 6 || len(all.Devices) != 0 {
+		t.Fatalf("legacy unfiltered snapshot = %+v err=%v, want all probes and no broad devices", all, err)
+	}
+}
+
+func TestHistory_FilteredDeviceDecoderSkipsNonSelectedNumericPayloads(t *testing.T) {
+	at := time.Unix(65_000, 0).UTC()
+	selectedDeviceID := devicemetric.SeriesID(devicemetric.KindGPU, []byte("selected"))
+	selectedSeriesID, err := devicemetric.HistorySeriesID(devicemetric.KindGPU, selectedDeviceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherDeviceID := devicemetric.SeriesID(devicemetric.KindGPU, []byte("other"))
+	otherSeriesID, err := devicemetric.HistorySeriesID(devicemetric.KindGPU, otherDeviceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectedRaw, err := json.Marshal(DeviceHistorySample{
+		SeriesID: selectedSeriesID, DeviceID: selectedDeviceID, Kind: devicemetric.KindGPU, TS: at,
+		Values: map[devicemetric.NumericKey]float64{devicemetric.GPUUtilizationPct: 0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := []byte(fmt.Sprintf(
+		`{"recorded_at":%q,"device_samples":[{"series_id":%q,"device_id":%q,"kind":"gpu","ts":%q,"values":"malformed-and-must-not-be-decoded"},%s]}`,
+		at.Format(time.RFC3339Nano), otherSeriesID, otherDeviceID, at.Format(time.RFC3339Nano), selectedRaw,
+	))
+	record, err := decodeTelemetryHistoryRecordForFilter(line, telemetryHistoryFilter{deviceSeriesID: selectedSeriesID})
+	if err != nil || len(record.DeviceSamples) != 1 || record.DeviceSamples[0].SeriesID != selectedSeriesID {
+		t.Fatalf("selector-aware decode = %+v err=%v, want only selected device", record, err)
+	}
+	if value, present := record.DeviceSamples[0].Values[devicemetric.GPUUtilizationPct]; !present || value != 0 {
+		t.Fatalf("selected valid zero = %v/%v, want 0/true", value, present)
+	}
+	withoutDevices, err := decodeTelemetryHistoryRecordForFilter(line, telemetryHistoryFilter{})
+	if err != nil || len(withoutDevices.DeviceSamples) != 0 {
+		t.Fatalf("omitted device selector decoded device values: %+v err=%v", withoutDevices, err)
 	}
 }
 
@@ -951,7 +1400,7 @@ func TestHistory_ContextCancellationInterruptsTailScan(t *testing.T) {
 	}
 	h.flushOnce()
 	ctx := &cancelAfterHistoryChecksContext{Context: context.Background(), remaining: 3}
-	_, err := readHistoryJSONLTail(ctx, filepath.Join(dir, "tn", "n1.jsonl"), base.Add(-time.Second), base.Add(time.Hour), 1_000, h.fileByteLimit(), telemetryHistoryProbeFilter{all: true})
+	_, err := readHistoryJSONLTail(ctx, filepath.Join(dir, "tn", "n1.jsonl"), base.Add(-time.Second), base.Add(time.Hour), 1_000, h.fileByteLimit(), telemetryHistoryFilter{allProbes: true})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("tail scan error = %v, want context cancellation during bounded backward scan", err)
 	}

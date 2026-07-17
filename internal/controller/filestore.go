@@ -22,7 +22,7 @@ import (
 // cross-process durability is provided by the atomic renames (a single controller process owns its
 // root). The on-disk layout below is FROZEN for persisted-data backward-compat.
 //
-// SPOF / scaling note (deferred to rc.2/GA — NOT fixed here): (1) ONE global mutex (fs.mu) serializes
+// SPOF / scaling note: (1) ONE global mutex (fs.mu) serializes
 // EVERY store operation, so throughput is single-writer; (2) WaitForGeneration POLLS generation.json
 // every 200ms (no in-process condition variable on the disk store). Neither is a correctness bug.
 //

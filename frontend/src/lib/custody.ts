@@ -76,11 +76,12 @@ export function dropAllKeys(topo: Topology): { topo: Topology; dropped: number }
 
 // stripLiveTelemetry clears a node's LIVE telemetry before it enters the
 // persisted controller-storage cache. It is live-only, never persisted, for two reasons: (1) custody —
-// wireguardPeers carries each peer's raw endpoint and probeResults carries operator-authorized probe
-// destinations, both fleet-confidential network topology of the same class the server-held design
-// blank keeps out of localStorage; (2) honesty — a handshake age, load value, or probe outcome frozen
-// at persist time is stale and misleading after a reload. The aggregate conditions still persist for
-// instant coloring; details are re-fetched live on refresh. Setting fields to undefined makes
+// wireguardPeers carries each peer's raw endpoint, probeResults carries operator-authorized probe
+// destinations, and deviceInventory describes fleet hardware/mounts; all are fleet-confidential
+// details of the same class the server-held design blank keeps out of localStorage; (2) honesty — a
+// handshake age, load value, device reading, or probe outcome frozen at persist time is stale and
+// misleading after a reload. The aggregate conditions still persist for instant coloring; details
+// are re-fetched live on refresh. Setting fields to undefined makes
 // JSON.stringify omit their keys (same idiom as dropAllKeys).
 //
 // MAINTENANCE: this clears every live-only telemetry projection. If a future
@@ -95,7 +96,10 @@ export function stripLiveTelemetry(node: ControllerNode): ControllerNode {
     wireguardPeers: undefined,
     resource: undefined,
     probeResults: undefined,
+    deviceInventory: undefined,
+    deviceSamples: undefined,
     nativeXDP: undefined,
     mimicCapability: undefined,
+    agentCapabilities: undefined,
   };
 }

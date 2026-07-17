@@ -14,6 +14,7 @@ import type {
 } from '../../types/controller';
 import { mapNodeConditions, type ConditionWire } from '../../lib/nodeConditions';
 import { mapProbeResults } from '../../lib/probeResults';
+import { mapDeviceTelemetry } from '../../lib/deviceTelemetry';
 import { parseContentDispositionFilename } from '../../lib/download';
 
 // --- backend snake_case response shapes (used only inside this module, discarded after mapping) ---
@@ -32,14 +33,17 @@ interface NodeJSON {
   rekey_requested: boolean;
   in_rollout?: boolean;
   conditions?: ConditionWire[];
-  // beta.12: the agent's extensible telemetry metrics map (served verbatim). The panel reads the
-  // known wireguard_peers + resource keys; other keys are ignored here.
+  // The agent's extensible telemetry metrics map (served verbatim). This boundary maps the known
+  // Fleet live projections; unknown keys remain forward-compatible and are ignored here.
   telemetry?: {
     wireguard_peers?: WireGuardPeerWire[];
     resource?: ResourceMetricWire;
     probe_results?: unknown;
+    device_inventory?: unknown;
+    device_samples?: unknown;
     native_xdp?: NativeXDPWire;
     mimic_capability?: MimicCapabilityWire;
+    agent_capabilities?: unknown;
   } | null;
 }
 
@@ -121,6 +125,10 @@ interface ClearRekeyResponseJSON {
 // --- snake_case → camelCase mapping ---
 
 function mapNode(n: NodeJSON): ControllerNode {
+  const devices = mapDeviceTelemetry(
+    n.telemetry?.device_inventory,
+    n.telemetry?.device_samples,
+  );
   return {
     nodeId: n.node_id,
     status: n.status as ControllerNode['status'],
@@ -138,9 +146,40 @@ function mapNode(n: NodeJSON): ControllerNode {
     wireguardPeers: mapWireGuardPeers(n.telemetry?.wireguard_peers),
     resource: mapResource(n.telemetry?.resource),
     probeResults: mapProbeResults(n.telemetry?.probe_results),
+    deviceInventory: devices.inventory,
+    deviceSamples: devices.samples,
     nativeXDP: mapNativeXDP(n.telemetry?.native_xdp),
     mimicCapability: mapMimicCapability(n.telemetry?.mimic_capability),
+    agentCapabilities: mapAgentCapabilities(n.telemetry?.agent_capabilities),
   };
+}
+
+const agentCapabilityPattern = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const maxAgentCapabilities = 16;
+
+// mapAgentCapabilities accepts only the controller's exact canonical latest-heartbeat form: at most
+// 16 valid tokens, already sorted and unique. It does not sort, deduplicate, or truncate malformed
+// evidence client-side because doing so could turn an invalid compatibility claim into a false
+// "Ready" state. A valid empty set remains [] so Fleet can distinguish it from not-confirmed.
+export function mapAgentCapabilities(w: unknown): string[] | undefined {
+  if (
+    !w ||
+    typeof w !== 'object' ||
+    Array.isArray(w) ||
+    Object.keys(w).length !== 1 ||
+    !Object.prototype.hasOwnProperty.call(w, 'capabilities')
+  ) {
+    return undefined;
+  }
+  const raw = (w as { capabilities: unknown }).capabilities;
+  if (!Array.isArray(raw) || raw.length > maxAgentCapabilities) return undefined;
+  const capabilities: string[] = [];
+  for (const value of raw) {
+    if (typeof value !== 'string' || !agentCapabilityPattern.test(value)) return undefined;
+    if (capabilities.length > 0 && capabilities[capabilities.length - 1] >= value) return undefined;
+    capabilities.push(value);
+  }
+  return capabilities;
 }
 
 // mapResource projects the agent's host resource metric (snake_case) to NodeResource. Defensive: a
