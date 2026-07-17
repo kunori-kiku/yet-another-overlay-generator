@@ -42,7 +42,7 @@ interface GenerationResponseJSON {
 }
 
 // compilePreview is a read-only, server-authoritative compile preview (operator-only): it
-// POSTs the current design, the server renders the enrolled subgraph (no staging, no
+// POSTs the current design, the server renders the deployment-ready subgraph (no staging, no
 // persistence, no side effects), and returns the configs plus the IDs of skipped (not yet
 // enrolled) nodes. Zero-knowledge — the rendered wg configs contain only placeholder private
 // keys. The response is the air-gap CompileResponse shape plus skipped_unenrolled.
@@ -54,7 +54,7 @@ export async function compilePreview(
   return (await res.json()) as CompileResponse;
 }
 
-// stage compiles the enrolled subgraph and stages it into the next generation (operator-only). An
+// stage compiles the deployment-ready subgraph and stages it into the next generation (operator-only). An
 // OPTIONAL force argument (plan-6) re-stages nodes even when their digest is unchanged: forceAll
 // re-stages the whole fleet, forceNodes re-stages named nodes — the escape hatch around the plan-5
 // delta-skip. No force (the default) ⇒ an empty body (a plain delta stage). The result now carries

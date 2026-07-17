@@ -15,7 +15,7 @@ import (
 // reservationTopo models the cross-subgraph collision root cause: a fleet where routerA<->routerB
 // is already deployed (its edge holds transit 10.10.0.1/.2, listen port 51820 on each end, and
 // link-locals fe80::1/::2), and routerB->routerD is a brand-new, unpinned edge. When only B and D
-// are enrolled, the enrolled subgraph is {B,D} + e-bd and DROPS e-ab (A not enrolled) — so without
+// are ready, the deployment-ready subgraph is {B,D} + e-bd and DROPS e-ab (A not enrolled) — so without
 // reserving e-ab's pins the subgraph's gap-fill restarts from .1 and hands e-bd the exact transit
 // IPs / port that e-ab still pins in the full topology, producing the "pin occupied by two different
 // links" corruption once persistAllocations writes e-bd's pins back. node-b is shared by both edges

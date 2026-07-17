@@ -743,6 +743,188 @@ func TestHistory_QuerySeesInflightFlushExactlyOnce(t *testing.T) {
 	assertLoads("after completion")
 }
 
+func TestHistory_QueryRetriesAcrossInflightDiskCommit(t *testing.T) {
+	dir := t.TempDir()
+	h := newTelemetryHistory(dir, 100, nil)
+	base := time.Unix(1000, 0).UTC()
+	for i := 0; i < 90; i++ {
+		h.append("tn", "n1", ResourceSample{TS: base.Add(time.Duration(i) * time.Second), Load1: float64(i)})
+	}
+	h.flushOnce()
+	for i := 90; i < 100; i++ {
+		h.append("tn", "n1", ResourceSample{TS: base.Add(time.Duration(i) * time.Second), Load1: float64(i)})
+	}
+
+	writeStarted := make(chan struct{})
+	allowWrite := make(chan struct{})
+	flushDone := make(chan struct{})
+	writeBatch := h.writeBatch
+	h.writeBatch = func(tenant TenantID, nodeID string, samples []telemetryHistoryRecord, cap int) error {
+		close(writeStarted)
+		<-allowWrite
+		return writeBatch(tenant, nodeID, samples, cap)
+	}
+	go func() {
+		h.flushOnce()
+		close(flushDone)
+	}()
+	select {
+	case <-writeStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("flush did not drain the ten-record batch")
+	}
+
+	querySnapshotted := make(chan struct{})
+	allowDiskRead := make(chan struct{})
+	var pauseOnce sync.Once
+	h.beforeDiskRead = func() {
+		pauseOnce.Do(func() {
+			close(querySnapshotted)
+			<-allowDiskRead
+		})
+	}
+	type queryResult struct {
+		samples []ResourceSample
+		err     error
+	}
+	queryDone := make(chan queryResult, 1)
+	go func() {
+		samples, err := h.query("tn", "n1", base.Add(-time.Second), base.Add(2*time.Minute))
+		queryDone <- queryResult{samples: samples, err: err}
+	}()
+	select {
+	case <-querySnapshotted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("query did not snapshot the in-flight suffix")
+	}
+
+	// Commit and clear the exact ten records after the query reserved ten volatile slots but before
+	// it scans disk. Without the flush epoch retry, the now-duplicated ten consume those reserved disk
+	// slots and only 90 of the retained 100 observations are returned.
+	close(allowWrite)
+	select {
+	case <-flushDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("flush did not commit the in-flight suffix")
+	}
+	close(allowDiskRead)
+	var result queryResult
+	select {
+	case result = <-queryDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("query did not retry after the flush transition")
+	}
+	if result.err != nil || len(result.samples) != 100 {
+		t.Fatalf("query across commit = %d samples (%v), want all 100", len(result.samples), result.err)
+	}
+	if result.samples[0].Load1 != 0 || result.samples[99].Load1 != 99 {
+		t.Fatalf("query across commit endpoints = %v/%v, want 0/99", result.samples[0].Load1, result.samples[99].Load1)
+	}
+}
+
+func TestHistory_QueryRetriesAcrossCapReduction(t *testing.T) {
+	dir := t.TempDir()
+	h := newTelemetryHistory(dir, 100, nil)
+	base := time.Unix(2000, 0).UTC()
+	for i := 0; i < 90; i++ {
+		h.append("tn", "n1", ResourceSample{TS: base.Add(time.Duration(i) * time.Second), Load1: float64(i)})
+	}
+	h.flushOnce()
+	for i := 90; i < 110; i++ {
+		h.append("tn", "n1", ResourceSample{TS: base.Add(time.Duration(i) * time.Second), Load1: float64(i)})
+	}
+
+	querySnapshotted := make(chan struct{})
+	allowDiskRead := make(chan struct{})
+	var pauseOnce sync.Once
+	h.beforeDiskRead = func() {
+		pauseOnce.Do(func() {
+			close(querySnapshotted)
+			<-allowDiskRead
+		})
+	}
+	type queryResult struct {
+		samples []ResourceSample
+		err     error
+	}
+	queryDone := make(chan queryResult, 1)
+	go func() {
+		samples, err := h.query("tn", "n1", base.Add(-time.Second), base.Add(3*time.Minute))
+		queryDone <- queryResult{samples: samples, err: err}
+	}()
+	select {
+	case <-querySnapshotted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("query did not snapshot the old-cap suffix")
+	}
+
+	h.setCap("tn", 10)
+	close(allowDiskRead)
+	var result queryResult
+	select {
+	case result = <-queryDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("query did not retry after the cap transition")
+	}
+	if result.err != nil || len(result.samples) != 10 {
+		t.Fatalf("query across cap reduction = %d samples (%v), want 10", len(result.samples), result.err)
+	}
+	if result.samples[0].Load1 != 100 || result.samples[9].Load1 != 109 {
+		t.Fatalf("query across cap reduction endpoints = %v/%v, want 100/109", result.samples[0].Load1, result.samples[9].Load1)
+	}
+}
+
+func TestHistory_QueryRetriesWhenCapChangesBeforeVolatileSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	h := newTelemetryHistory(dir, 100, nil)
+	base := time.Unix(3000, 0).UTC()
+	for i := 0; i < 100; i++ {
+		h.append("tn", "n1", ResourceSample{TS: base.Add(time.Duration(i) * time.Second), Load1: float64(i)})
+	}
+	h.flushOnce()
+
+	capRead := make(chan struct{})
+	allowSnapshot := make(chan struct{})
+	var pauseOnce sync.Once
+	h.afterQueryCapRead = func() {
+		pauseOnce.Do(func() {
+			close(capRead)
+			<-allowSnapshot
+		})
+	}
+	type queryResult struct {
+		samples []ResourceSample
+		err     error
+	}
+	queryDone := make(chan queryResult, 1)
+	go func() {
+		samples, err := h.query("tn", "n1", base.Add(-time.Second), base.Add(3*time.Minute))
+		queryDone <- queryResult{samples: samples, err: err}
+	}()
+	select {
+	case <-capRead:
+	case <-time.After(3 * time.Second):
+		t.Fatal("query did not read the old cap")
+	}
+
+	// Publish and apply the smaller cap before the query takes history.mu. Its epoch snapshot is
+	// therefore already new; only the explicit end-cap comparison can detect the stale cap value.
+	h.setCap("tn", 10)
+	close(allowSnapshot)
+	var result queryResult
+	select {
+	case result = <-queryDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("query did not retry after the pre-snapshot cap transition")
+	}
+	if result.err != nil || len(result.samples) != 10 {
+		t.Fatalf("query across pre-snapshot cap reduction = %d samples (%v), want 10", len(result.samples), result.err)
+	}
+	if result.samples[0].Load1 != 90 || result.samples[9].Load1 != 99 {
+		t.Fatalf("query across pre-snapshot cap reduction endpoints = %v/%v, want 90/99", result.samples[0].Load1, result.samples[9].Load1)
+	}
+}
+
 func TestHistory_CompactOverCap(t *testing.T) {
 	dir := t.TempDir()
 	h := newTelemetryHistory(dir, 5, nil) // cap 5; the FILE compacts once it passes cap*slack=10 lines

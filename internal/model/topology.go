@@ -127,11 +127,10 @@ type Node struct {
 
 	// TelemetryProbes are operator-authorized active reachability checks run by this managed
 	// node after the containing deployment bundle has passed the off-host keystone gate and
-	// applied successfully. Host is an explicit IP literal or DNS hostname; it is intentionally
-	// independent of topology membership so operators can monitor external dependencies. The
-	// type discriminator is the extension boundary for future probe kinds (for example URL),
-	// whose additional fields must be introduced and validated explicitly rather than smuggled
-	// through Host.
+	// applied successfully. ICMP/TCP Host is an explicit IP literal or DNS hostname, while URL
+	// probes use their separately validated URL field. Destinations are intentionally independent
+	// of topology membership so operators can monitor external or internal dependencies without
+	// overloading one probe type's fields into another request shape.
 	TelemetryProbes []TelemetryProbe `json:"telemetry_probes,omitempty"`
 
 	// TelemetryDevices requests automatic discovery of eligible local devices. It is a separately

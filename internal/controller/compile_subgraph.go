@@ -1,12 +1,9 @@
 package controller
 
-// compile_subgraph.go — CompileSubgraph (the read-only compile half shared by stage and
-// preview), the enrolled-subgraph projection (enrolledSubgraph, clientTargetEnrolled),
-// and allocation write-back (persistAllocations). Split from compile.go (plan-2);
-// no logic change.
+// compile_subgraph.go contains the read-only compile half shared by stage and preview,
+// deployment-ready projection, and optimistic allocation write-back.
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -20,16 +17,16 @@ import (
 )
 
 // CompileSubgraph runs the read-only compile half shared by CompileAndStage and the
-// operator compile-preview: build the enrolled subgraph of `topo` from the registry
-// `nodes`, then drive the frozen, zero-knowledge pipeline through the localcompile façade
+// operator compile-preview: build the deployment-ready subgraph of `topo` from registry-backed
+// managed nodes and validated topology-backed manual nodes, then drive the frozen, zero-knowledge pipeline through the localcompile façade
 // (the single compile authority) in AgentHeld custody — private keys are
 // PRIVATEKEY_PLACEHOLDER, never real material. It performs NO store writes, NO allocation
 // persist, NO export, and NO staging; the caller decides what to do with the rendered result.
 //
-// Returns a NIL result when no node is enrolled (subgraph.Nodes empty) — the caller
-// handles that case (CompileAndStage purges + audits; a preview reports "nothing
-// enrolled"). `skipped` lists the node IDs present in the topology but dropped from the
-// render because they are not yet enrolled. Custody invariant: because the façade runs
+// Returns a NIL result when no node is ready (subgraph.Nodes empty) — the caller
+// handles that case (CompileAndStage purges + audits; a preview reports "nothing ready").
+// `skipped` lists managed-node IDs dropped from the ready projection (the public wire field retains
+// the historical name SkippedUnenrolled). Custody invariant: because the façade runs
 // AgentHeld, neither the returned result nor anything rendered from it contains a real
 // private key — making this safe to surface to an authenticated operator (PR6 preview).
 //
@@ -70,7 +67,7 @@ func CompileSubgraphWithSigner(ctx context.Context, topo *model.Topology, nodes 
 		return nil, subgraph, skipped, err
 	}
 	// Reserve the allocation pins held by edges in the FULL topology that are NOT in this
-	// subgraph (dropped because a far end is not yet enrolled). Without this, the subgraph's
+	// subgraph (dropped because a far end is not deployment-ready). Without this, the subgraph's
 	// gap-fill restarts from .1 and can hand a fresh edge a transit IP / port / link-local that
 	// a dropped edge still pins in storage — and since each incremental enrollment compiles a
 	// DIFFERENT subgraph, two edges that were never compiled together collide (the "pin occupied
@@ -102,12 +99,12 @@ func CompileSubgraphWithSigner(ctx context.Context, topo *model.Topology, nodes 
 		CompiledAt: time.Now(),
 	})
 	if err != nil {
-		return nil, subgraph, skipped, fmt.Errorf("controller: compiling enrolled subgraph: %w", err)
+		return nil, subgraph, skipped, fmt.Errorf("controller: compiling ready subgraph: %w", err)
 	}
 	return result, subgraph, skipped, nil
 }
 
-// projectEnrolledSubgraph performs the validation/readiness half without rendering. Stage uses
+// projectEnrolledSubgraph performs the deployment-readiness half without rendering. Stage uses
 // this preflight to preserve the security-critical empty-stage purge even when the configured
 // bundle-signing key is unreadable: no ready node means no signed bytes are needed, but stale
 // staged bundles must still be destroyed. CompileSubgraphWithSigner uses the same helper so the
@@ -117,7 +114,7 @@ func projectEnrolledSubgraph(topo *model.Topology, nodes []Node) (model.Topology
 	// is admitted: a manual node carries its own pre-known public key (no enrollment proves it), so it
 	// must have one and it must be unique across the fleet. This runs on BOTH the stage and the compile
 	// -preview path, so a missing/colliding manual key is a LOUD error, not the silent exclusion
-	// enrolledSubgraph would otherwise apply.
+	// the historical enrolledSubgraph helper would otherwise apply.
 	if err := validateManualNodes(topo, nodes); err != nil {
 		return model.Topology{}, nil, err
 	}
@@ -142,9 +139,11 @@ func projectEnrolledSubgraph(topo *model.Topology, nodes []Node) (model.Topology
 // activates on a later deploy once its far end enrolls, while a manual far end is
 // ready immediately from its topology key.
 //
-// It returns the subgraph plus the list of excluded MANAGED node IDs (skipped =
-// not-yet-enrolled). Manual nodes are NEVER listed as skipped — they are intentionally
-// agent-less, not "not yet ready". The input topology is never mutated (value copy).
+// It returns the subgraph plus the list of excluded MANAGED node IDs. The historical
+// skipped/SkippedUnenrolled name covers every managed node excluded from readiness,
+// including a client whose target is not ready. Manual nodes are NEVER listed as
+// skipped — they are intentionally agent-less. The input topology is never mutated
+// (value copy).
 func enrolledSubgraph(topo *model.Topology, nodes []Node) (model.Topology, []string) {
 	// registry indexes the enrolled public key by node ID. A managed node is enrolled iff
 	// it is NodeApproved with a non-empty WGPublicKey — the admission test.
@@ -193,7 +192,7 @@ func enrolledSubgraph(topo *model.Topology, nodes []Node) (model.Topology, []str
 	var skipped []string
 	for _, node := range topo.Nodes { // value copy: never mutate the caller's slice
 		if !ready[node.ID] {
-			// A not-ready MANAGED node is "skipped" (waiting to enroll). A not-ready manual
+			// A not-ready MANAGED node is "skipped". A not-ready manual
 			// node would mean a missing topology pubkey — a design error the controller-registration
 			// validator will reject (plan-2); until then this branch defensively excludes it. Either
 			// way a manual node is never reported as a transient enrollment skip.
@@ -217,12 +216,12 @@ func enrolledSubgraph(topo *model.Topology, nodes []Node) (model.Topology, []str
 	return sub, skipped
 }
 
-// clientTargetEnrolled reports whether a client node has an enabled outbound edge
-// whose dial target is enrolled — the readiness condition for compiling the client
-// (a client must have exactly one enabled outbound edge).
-func clientTargetEnrolled(topo *model.Topology, clientID string, enrolled map[string]bool) bool {
+// clientTargetEnrolled is the historical helper name for checking whether a client
+// has an enabled outbound edge whose dial target is deployment-ready. A manual target
+// can be ready without enrollment. A client must have exactly one enabled outbound edge.
+func clientTargetEnrolled(topo *model.Topology, clientID string, ready map[string]bool) bool {
 	for _, e := range topo.Edges {
-		if e.FromNodeID == clientID && e.IsEnabled && enrolled[e.ToNodeID] {
+		if e.FromNodeID == clientID && e.IsEnabled && ready[e.ToNodeID] {
 			return true
 		}
 	}
@@ -237,14 +236,13 @@ func clientTargetEnrolled(topo *model.Topology, clientID string, enrolled map[st
 // finds these pins in the stored topology and the compiler reuses them (sticky-pin),
 // which is what keeps allocations stable across incremental enrollment (I10).
 //
-// Note (plan-2): a PutTopology write-back that CHANGES the stored topology counts
-// as a retained version like any other — the pinned post-stage shape is itself a
-// state an operator may want to recover. A write-back whose bytes equal the stored
-// record (sticky pins re-derived identically, the common re-stage case) is SKIPPED:
-// burning one of the bounded history slots per no-op stage would let routine
-// incremental-enrollment staging flush every operator-authored version out of the
-// recovery window (review finding, D7).
-func persistAllocations(ctx context.Context, store Store, t TenantID, full, compiled *model.Topology, originalJSON []byte) error {
+// Note (plan-2): CompareAndSetTopology always checks originalVersion, including when
+// the derived bytes are identical, so a stale deployment snapshot cannot overwrite or
+// silently pass a concurrent Save. A changed CAS write-back counts as a retained version
+// like any other — the pinned post-stage shape is recoverable. A byte-identical CAS is a
+// data/history no-op after that version check; otherwise routine incremental-enrollment
+// staging could flush operator-authored versions from the bounded recovery window.
+func persistAllocations(ctx context.Context, store Store, t TenantID, full, compiled *model.Topology, originalVersion int64) error {
 	ipByID := make(map[string]string, len(compiled.Nodes))
 	for _, n := range compiled.Nodes {
 		ipByID[n.ID] = n.OverlayIP
@@ -262,7 +260,7 @@ func persistAllocations(ctx context.Context, store Store, t TenantID, full, comp
 	for i := range full.Edges {
 		c, ok := edgeByID[full.Edges[i].ID]
 		if !ok {
-			continue // edge not in the compiled subgraph (far end unenrolled) — leave unpinned
+			continue // edge not in the compiled subgraph (far end not ready) — leave unpinned
 		}
 		full.Edges[i].CompiledPort = c.CompiledPort
 		full.Edges[i].PinnedFromPort = c.PinnedFromPort
@@ -278,13 +276,11 @@ func persistAllocations(ctx context.Context, store Store, t TenantID, full, comp
 	if err != nil {
 		return fmt.Errorf("controller: marshaling topology with persisted allocations: %w", err)
 	}
-	// No-op write-back: the stored record is canonical json.Marshal output (the
-	// update-topology custody gate canonicalizes), so byte equality here means the
-	// pins changed nothing. Skip the put — do not burn a history slot.
-	if bytes.Equal(raw, originalJSON) {
-		return nil
-	}
-	if _, err := store.PutTopology(ctx, t, raw); err != nil {
+	// Compare even when write-back is byte-identical. The Store makes that case a no-op without
+	// consuming history, but still catches an operator save that landed after this stage loaded its
+	// design before this commit point. The deployment snapshot linearizes at this compare; a later
+	// save remains the next unapplied draft, as it does for any save made after a deployment starts.
+	if _, err := store.CompareAndSetTopology(ctx, t, originalVersion, raw); err != nil {
 		return fmt.Errorf("controller: persisting allocations: %w", err)
 	}
 	return nil

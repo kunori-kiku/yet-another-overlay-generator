@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/probepolicy"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrycap"
@@ -115,6 +116,47 @@ func TestReadiness_URLRequiresFeatureCapability(t *testing.T) {
 	}
 }
 
+func TestReadiness_UnenrolledTelemetryDraftDoesNotBlockReadyNodes(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemStore()
+	tenant := TenantID("telemetry-unenrolled-draft")
+	topo := stageTestTopo()
+	topo.Nodes[1].TelemetryProbes = []model.TelemetryProbe{{
+		ID: "unfinished", Type: model.TelemetryProbeICMP, Host: "",
+	}}
+	raw, err := json.Marshal(topo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PutTopology(ctx, tenant, raw); err != nil {
+		t.Fatal(err)
+	}
+	approveNode(t, ctx, store, tenant, "node-router", genWGPubKey(t))
+
+	preview, err := DeployPreview(ctx, store, tenant, topo)
+	if err != nil {
+		t.Fatalf("preview with unenrolled draft: %v", err)
+	}
+	if len(preview.Nodes) != 1 || preview.Nodes[0].NodeID != "node-router" ||
+		!reflect.DeepEqual(preview.SkippedUnenrolled, []string{"node-peer", "node-client"}) {
+		t.Fatalf("preview = %+v, want only ready router and skipped draft nodes", preview)
+	}
+	staged, err := CompileAndStage(ctx, store, tenant, time.Unix(2_000, 0).UTC())
+	if err != nil {
+		t.Fatalf("stage with unenrolled draft: %v", err)
+	}
+	if !reflect.DeepEqual(staged.Staged, []string{"node-router"}) {
+		t.Fatalf("staged nodes = %v, want router only", staged.Staged)
+	}
+
+	approveNode(t, ctx, store, tenant, "node-peer", genWGPubKey(t))
+	_, err = DeployPreview(ctx, store, tenant, topo)
+	var validation *compiler.TopologyValidationError
+	if !errors.As(err, &validation) || validation.Phase != "schema" || len(validation.Findings) == 0 {
+		t.Fatalf("preview after draft node became ready = %v / %+v, want schema validation", err, validation)
+	}
+}
+
 func TestUpgradeAgentsFirst_ProjectsOnlySuccessorFieldsAndReportsSortedIDs(t *testing.T) {
 	topo := stageTestTopo()
 	topo.Nodes[0].TelemetryProbes = []model.TelemetryProbe{
@@ -124,7 +166,11 @@ func TestUpgradeAgentsFirst_ProjectsOnlySuccessorFieldsAndReportsSortedIDs(t *te
 	topo.Nodes[0].TelemetryDevices = &model.TelemetryDevicePolicy{Mode: string(probepolicy.DeviceModeAllEligibleV1)}
 	topo.Nodes[2].TelemetryDevices = &model.TelemetryDevicePolicy{Mode: string(probepolicy.DeviceModeAllEligibleV1)}
 
-	projected, omitted, err := PrepareTelemetryPolicyDeployment(topo, nil, TelemetryPolicyDeployUpgradeAgentsFirst)
+	nodes := []Node{
+		{NodeID: "node-router", Status: NodeApproved, WGPublicKey: genWGPubKey(t)},
+		{NodeID: "node-client", Status: NodeApproved, WGPublicKey: genWGPubKey(t)},
+	}
+	projected, omitted, err := PrepareTelemetryPolicyDeployment(topo, nodes, TelemetryPolicyDeployUpgradeAgentsFirst)
 	if err != nil {
 		t.Fatalf("upgrade-first projection: %v", err)
 	}
@@ -142,8 +188,27 @@ func TestUpgradeAgentsFirst_ProjectsOnlySuccessorFieldsAndReportsSortedIDs(t *te
 	if topo.Nodes[0].TelemetryDevices == nil || topo.Nodes[2].TelemetryDevices == nil || len(topo.Nodes[0].TelemetryProbes) != 2 {
 		t.Fatal("upgrade-first projection erased the saved successor draft")
 	}
-	if _, _, err := PrepareTelemetryPolicyDeployment(topo, nil, "future-mode"); err == nil {
+	if _, _, err := PrepareTelemetryPolicyDeployment(topo, nodes, "future-mode"); err == nil {
 		t.Fatal("unsupported telemetry deployment mode was accepted")
+	}
+}
+
+func TestUpgradeAgentsFirst_ReportsOnlyReadySuccessorNodes(t *testing.T) {
+	topo := stageTestTopo()
+	for i := range topo.Nodes[:2] {
+		topo.Nodes[i].TelemetryDevices = &model.TelemetryDevicePolicy{Mode: string(probepolicy.DeviceModeAllEligibleV1)}
+	}
+	nodes := []Node{{NodeID: "node-router", Status: NodeApproved, WGPublicKey: genWGPubKey(t)}}
+
+	projected, omitted, err := PrepareTelemetryPolicyDeployment(topo, nodes, TelemetryPolicyDeployUpgradeAgentsFirst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(omitted, []string{"node-router"}) {
+		t.Fatalf("omitted nodes = %v, want only render-ready router", omitted)
+	}
+	if projected.Nodes[0].TelemetryDevices != nil || projected.Nodes[1].TelemetryDevices != nil {
+		t.Fatal("legacy compile projection retained successor policy in the saved-topology copy")
 	}
 }
 

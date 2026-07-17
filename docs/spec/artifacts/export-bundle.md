@@ -21,6 +21,8 @@ per-node directory key:
 │   ├── install.sh
 │   ├── README.txt
 │   ├── artifacts.json              # only when a catalog produced content
+│   ├── telemetry.json              # optional AgentHeld ICMP/TCP-only v1 policy
+│   ├── telemetry-policy.json       # optional AgentHeld URL/device v2 policy; mutually exclusive
 │   ├── checksums.sha256
 │   ├── bundle.sig                  # only when bundle signing is enabled
 │   ├── signing-pubkey.pem          # only when bundle signing is enabled
@@ -41,12 +43,19 @@ project deploy helpers. See [naming.md](./naming.md).
 - `sysctl/99-overlay.conf`;
 - `install.sh`;
 - `README.txt` (its custody-critical application guidance is integrity-bound); and
-- `artifacts.json` only when a configured catalog emits non-empty content.
+- `artifacts.json` only when a configured catalog emits non-empty content; and
+- at most one AgentHeld telemetry member: frozen `telemetry.json` v1 for ICMP/TCP-only policy, or
+  strict `telemetry-policy.json` v2 when URL probes or automatic devices are enabled.
 
-Exactly those members are written to disk, listed as members in `manifest.json`, and covered by
+Those members are written to disk, listed as members in `manifest.json`, and covered by
 `checksums.sha256`. `bundle.sig` and `signing-pubkey.pem` are authenticity sidecars over that set;
 `checksums.sha256` is the digest list itself; `manifest.json` is compile metadata. Those four files
 are not members and cannot self-reference.
+
+The telemetry members are mutually exclusive and absent from AirGap bundles. When present they are
+ordinary integrity members: `checksums.sha256` covers their exact bytes, optional tier-1
+`bundle.sig` authenticates that checksum set, and the controller's required off-host keystone
+membership binds the resulting per-node bundle digest before an agent can activate the policy.
 
 WireGuard configuration files are written at mode `0600`; `install.sh` is `0755`; the remaining
 bundle files are `0644`. Export renders the complete result into a fresh sibling tree, rejects a

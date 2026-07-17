@@ -48,23 +48,24 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/render"
 )
 
-// StageResult reports the outcome of CompileAndStage. Staged and SkippedUnenrolled
-// are NODE IDs (the registry/agent identity), not node names. Generation is the
+// StageResult reports the outcome of CompileAndStage. Its node lists contain topology
+// node IDs, not display names. Generation is the
 // staged generation (CurrentGeneration+1); it becomes current only when the
 // operator calls PromoteStaged.
 type StageResult struct {
 	// Staged holds the node IDs that were compiled and staged this generation — the UPDATED nodes whose
-	// bundle content changed (or every enrolled node when the delta-skip is disabled/inapplicable).
+	// bundle content changed (or every deployment-ready node when delta-skip is disabled/inapplicable).
 	Staged []string
-	// UnchangedNodeIDs holds the enrolled nodes SKIPPED this deploy because their freshly compiled bundle
+	// UnchangedNodeIDs holds deployment-ready nodes SKIPPED this deploy because their freshly compiled bundle
 	// digest equals their currently-served bundle (plan-5 delta-skip): they keep their current generation,
-	// so their agents see no new generation and never re-apply. Empty when the skip is disabled (keystone
+	// and managed agents therefore see no new bundle generation and never re-apply. Empty when the skip is disabled (keystone
 	// rotation / first-pin) or every node changed. Staged + UnchangedNodeIDs together are the full
-	// enrolled set for a normal deploy.
+	// deployment-ready set for a normal deploy.
 	UnchangedNodeIDs []string
-	// SkippedUnenrolled holds the node IDs present in the topology but excluded
-	// from the render because they are not yet enrolled (not NodeApproved, or no
-	// WGPublicKey). Each fills in on a later deploy once it enrolls.
+	// SkippedUnenrolled is the historical wire name for managed-node IDs present in
+	// the topology but excluded from the deployment-ready projection. Reasons include
+	// pending/revoked/keyless registry state and a ready client whose target is not
+	// ready. Manual nodes are never reported here.
 	SkippedUnenrolled []string
 	// TelemetryPolicyOmittedNodeIDs identifies nodes whose successor-only policy fields were omitted
 	// from an explicit upgrade-agents-first deployment. The stored design remains unchanged.

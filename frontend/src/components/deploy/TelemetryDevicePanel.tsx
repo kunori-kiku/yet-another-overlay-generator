@@ -187,7 +187,7 @@ export function TelemetryDevicePanel({
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="break-all text-sm font-medium text-[var(--content)]">{device.label}</div>
-                      <div className="mt-0.5 text-xs text-[var(--content-muted)]">
+                      <div className="mt-0.5 break-all text-xs text-[var(--content-muted)]">
                         {t(language, KIND_KEYS[device.kind])}
                         {device.mountPoint ? ` · ${device.mountPoint}` : ''}
                         {device.fsType ? ` · ${device.fsType}` : ''}

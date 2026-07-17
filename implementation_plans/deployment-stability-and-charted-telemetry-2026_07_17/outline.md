@@ -205,6 +205,23 @@ controller-store, agent, render-keys, artifacts-signing, panel-deploy-fleet, pan
   and added exact-series Fleet charts without persisting live hardware data in the browser.
 - 2026-07-17 — plan-7 specs touch update deferred to plan-8's mandatory full refresh; the coordinated
   dirty specs and adversarial E2E coverage remain isolated for the integrated documentation/gate pass.
+- 2026-07-17 — specs/ refreshed; 18 components; 4 new/14 changed/0 unchanged breakdown; old-arch
+  quarantined: no.
+- 2026-07-17 — plan-8 integrated review/fix/re-review is clean across security/custody,
+  controller transactions and history, compatibility, frontend persistence/accessibility, release
+  readiness, structure, and coding hygiene. The final corrections were documentation, bilingual UI
+  copy, and source comments; no post-gate production behavior changed.
+- 2026-07-17 — the exact behavioral candidate passed `go test ./...`, `go test -race ./...`,
+  `go vet ./...`, the coverage/wiredrift gates, frontend lint/build:wasm/build/Vitest, Playwright
+  (78 passed, 6 intentionally skipped), real-tunnel, govulncheck, DAST, npm audit, gosec advisory,
+  exact 22-asset release-shape verification, and Docker Buildx validation. PowerShell was unavailable
+  locally and remains covered by required PR/exact-main CI. Physical NVIDIA/AMD hardware was not
+  available; fixture, cross-build, and provider-boundary coverage passed and the caveat remains explicit.
+- 2026-07-17 — post-review copy/comment changes passed gofmt, frontend lint, `git diff --check HEAD`,
+  and final validation of 228 relative links across 25 modified Markdown files.
+- 2026-07-17 — authoritative early preflight found no local/GitHub `v2.0.0-rc.12` tag, no GitHub
+  release or draft, and no official GHCR rc.12 image reference. Plan 9 must repeat that check from
+  clean exact main immediately before the immutable tag.
 
 ## Milestones
 

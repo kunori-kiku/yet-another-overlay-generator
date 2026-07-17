@@ -65,6 +65,8 @@ func TestValidateURLProbeSurface(t *testing.T) {
 	valid := []model.TelemetryProbe{
 		{ID: "http", Type: model.TelemetryProbeURL, URL: "http://127.0.0.1:8080/health"},
 		{ID: "ipv6", Type: model.TelemetryProbeURL, URL: "https://[::1]:8443/status?check=yes", ExpectedStatus: 204},
+		{ID: "upper", Type: model.TelemetryProbeURL, URL: "HTTPS://example.test/%7Eready"},
+		{ID: "opaque-query", Type: model.TelemetryProbeURL, URL: "https://example.test/health?opaque=%zz"},
 	}
 	if err := Validate(valid); err != nil {
 		t.Fatalf("signed internal URL targets rejected: %v", err)
@@ -74,6 +76,12 @@ func TestValidateURLProbeSurface(t *testing.T) {
 		{ID: "empty", Type: model.TelemetryProbeURL},
 		{ID: "space", Type: model.TelemetryProbeURL, URL: " https://example.test/"},
 		{ID: "control", Type: model.TelemetryProbeURL, URL: "https://example.test/\n"},
+		{ID: "query-space", Type: model.TelemetryProbeURL, URL: "https://example.test/?q=hello world"},
+		{ID: "ipv6-zone", Type: model.TelemetryProbeURL, URL: "https://[fe80::1%25eth0]/"},
+		{ID: "escaped-host", Type: model.TelemetryProbeURL, URL: "https://%E2%98%83.example/"},
+		{ID: "unicode-host", Type: model.TelemetryProbeURL, URL: "https://☃.example/"},
+		{ID: "bracketed-dns", Type: model.TelemetryProbeURL, URL: "https://[example.test]/"},
+		{ID: "bracketed-ipv4", Type: model.TelemetryProbeURL, URL: "https://[192.0.2.1]/"},
 		{ID: "scheme", Type: model.TelemetryProbeURL, URL: "ftp://example.test/file"},
 		{ID: "relative", Type: model.TelemetryProbeURL, URL: "/health"},
 		{ID: "userinfo", Type: model.TelemetryProbeURL, URL: "https://user@example.test/"},

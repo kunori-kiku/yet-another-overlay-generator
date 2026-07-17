@@ -1,6 +1,6 @@
 # Frontend architecture
 
-<!-- last-verified: 2026-07-15 -->
+<!-- last-verified: 2026-07-17 -->
 
 The React/Vite frontend supports two workflows in one application:
 
@@ -74,7 +74,8 @@ persistable because they are user-owned local data.
 `frontend/src/stores/controllerStore.ts` composes one stable public store from focused slices under
 `frontend/src/stores/controller/`:
 
-- `auth.ts` — mode, login/session, logout, and auth-derived state;
+- `auth.ts` — mode, login/session, logout, authenticated controller version/capabilities, and
+  auth-derived state;
 - `fleet.ts` — node/audit views, enrollment, revocation, rekey, and live reads;
 - `deploy.ts` — server compile preview, deploy preview, stage, and promote;
 - `keystone.ts` — public credential metadata and signing workflow;
@@ -88,17 +89,48 @@ and public keystone identifiers. It excludes operator/session/CSRF tokens, signi
 preview results, transient errors/loading, and raw live telemetry. Auth secrets stay in memory or
 httpOnly cookies.
 
-Fleet owns active telemetry. The registry joins each topology node's configured `telemetry_probes`
-with the live controller node's `probeResults` for a compact summary; the node-detail page co-locates
-the policy editor, whole-design Save action/conflict dialog, latest results, and component-local
-latency/availability history. Design's properties aside does not own this operational editor. Saving
-remains a topology-draft mutation, while Deploy is the distinct signature and activation boundary.
-History fetched for charts never enters the Zustand persistence boundary. Both Fleet routes share a
+Fleet owns active telemetry. The registry and node detail join configured `telemetry_probes` and
+`telemetry_devices` with live `probeResults`, `deviceInventory`, and `deviceSamples`. The detail page
+co-locates the hand-edited policy, whole-design Save/conflict flow, latest status, and
+component-local charts; Design's properties aside does not own this operational editor. The typed
+probe editor supports ICMP/TCP host destinations and an HTTP(S) URL plus expected success status.
+The device control is one automatic-discovery opt-in (`all-eligible-v1`), not a browser-authored
+hardware list.
+
+Each probe may have a presentation-only name, with immutable ID as fallback. Result matching and
+history requests use ID plus the exact typed destination and, for URL probes, expected status. Names
+are absent from both executable policy members, so a name-only Save does not restage a bundle. Save
+is a topology-draft mutation and may preserve an unfinished destination row; Deploy is the separate
+keystone-sign-and-activate boundary, and preview/stage blocks only when that invalid draft belongs to
+a ready node. Before every successor-bearing Save, the store refreshes the authenticated session and
+requires controller capability `telemetry-policy-v2-topology`; an older controller is refused rather
+than allowed to canonicalize URL/device fields away.
+
+Normal Deploy also requires each affected managed node's latest authenticated capabilities. The
+structured `telemetry_policy_upgrade_required` dialog offers the explicit `upgrade-agents-first`
+path: preserve the complete saved draft and deploy compatible legacy policy while listing
+`telemetry_policy_omitted_node_ids`. A configured signed rollout upgrades only its covered nodes;
+absent or partial coverage produces a non-blocking warning, and uncovered agents must be updated out
+of band. After every affected node has advertised the required capabilities through authenticated
+telemetry, a normal Deploy activates the retained URL/device policy. The compatibility mode is never
+an implicit fallback.
+
+Probe latency and availability use the shared exact-series history chart. Device charts reuse that
+framework for filesystem-used percentage, disk read/write rate, disk-I/O-busy percentage, GPU
+utilization, and GPU-VRAM-used percentage. Actual URL status and categorical device inventory/provider
+status remain live context rather than artificial numeric series. Missing values remain chart gaps;
+zero is plotted when it was genuinely measured. Fetched history, probe results, device inventory,
+and device samples never enter the Zustand persistence boundary. Both Fleet routes share a
 non-overlapping ten-second Live scheduler and one feedback control that exposes in-flight refresh,
 last-success age, next refresh, hidden-tab pause, and stale/error state. The Live/manual path fetches
 only the node observation endpoint; full audit, Settings, and keystone hydration remain foreground or
 security/bootstrap work. Fleet freshness has its own transient clock, so an unrelated topology save
 cannot make telemetry appear current.
+
+The audit view consumes the complete raw controller chain and uses its server verification result for
+the integrity badge. For compatibility, raw legacy `action:"report"` rows remain in that chain; only
+after full-chain verification does the component filter those noisy historical rows from the visible
+operator table. New routine agent reports update Fleet state and do not create audit rows.
 
 ### `uiStore`
 
@@ -169,8 +201,8 @@ wire-drift mirror, and a shared frontend resolver instead of growing view-local 
   stripped/refused at controller boundaries.
 - Controller auth secrets are never in a Zustand persistence allowlist. Browser sessions use
   httpOnly cookies; break-glass bearer material is memory-only.
-- Live peer and active-probe telemetry is fetched for display and removed from the persisted fleet
-  cache.
+- Live peer/probe telemetry, device inventory/samples, and fetched history are display-only and
+  removed from the persisted fleet cache.
 - Every persisted store has an explicit allowlist. Adding a field to a store does not implicitly
   authorize writing it to localStorage.
 - Mode transitions are security boundaries: they scrub keys, allocations, compile results/history,

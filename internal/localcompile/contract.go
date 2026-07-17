@@ -114,6 +114,8 @@ type CompileArtifacts struct {
 	//	sysctl/99-overlay.conf
 	//	install.sh
 	//	README.txt
+	//	telemetry.json          (AgentHeld ICMP/TCP-only policy, mutually exclusive with successor)
+	//	telemetry-policy.json   (AgentHeld URL/device successor policy, mutually exclusive with v1)
 	//	artifacts.json           (only when a mimic/agent catalog is configured; omitted
 	//	                          otherwise so a non-catalog bundle stays byte-identical, D4)
 	//

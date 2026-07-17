@@ -8,7 +8,7 @@ import (
 // the subgraph" that a "subgraph compile" must avoid.
 //
 // Background (cross-subgraph collision root cause): when the controller enrolls
-// incrementally it only compiles the "already-enrolled subgraph"; edges whose
+// incrementally it only compiles the deployment-ready subgraph; edges whose
 // remote end is not yet enrolled are dropped by enrolledSubgraph. The compiler
 // cannot see them, so gap-fill re-allocates from .1 and collides with the pins
 // those dropped edges still hold (persisted in the full topology). Reserving the

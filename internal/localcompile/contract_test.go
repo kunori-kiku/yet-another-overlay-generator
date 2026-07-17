@@ -156,13 +156,15 @@ func TestCompile_LosslessWrapper(t *testing.T) {
 }
 
 // TestCompile_InputTopologyUnmutated proves the façade is pure with respect to its INPUT:
-// CompileResult clones the topology's Node/Edge slices, so the pipeline's in-place write-backs
-// (GenerateKeysWith stamps the generated WireGuard keys onto nodes; the allocator stamps overlay
-// IPs/pins) never reach the caller's CompileRequest.Topology. The written-back topology is the
-// returned result.Topology instead. The fixture starts with EMPTY keys (case-c), so
-// GenerateKeysWith WOULD mutate the caller's nodes if the clone were missing.
+// CompileResult clones every topology collection, so the pipeline's in-place normalization and
+// write-backs (schema defaults domain routing modes and edge transports, GenerateKeysWith stamps
+// generated WireGuard keys onto nodes, and the allocator stamps overlay IPs/pins) never reach the
+// caller's CompileRequest.Topology. The written-back topology is the returned result.Topology instead.
+// The fixture starts with an empty routing mode and empty keys, so both schema validation and key
+// generation would mutate caller-owned slices if their clones were missing.
 func TestCompile_InputTopologyUnmutated(t *testing.T) {
 	reqTopo := simpleMeshTopo() // empty WG keys + empty overlay IPs to start
+	reqTopo.Domains[0].RoutingMode = ""
 
 	art, err := Compile(CompileRequest{Topology: reqTopo, Custody: render.AirGap})
 	if err != nil {
@@ -170,6 +172,9 @@ func TestCompile_InputTopologyUnmutated(t *testing.T) {
 	}
 
 	// The caller's topology must be byte-for-byte untouched by the compile.
+	if got := reqTopo.Domains[0].RoutingMode; got != "" {
+		t.Errorf("input domain routing mode mutated to %q; want the caller's empty default unchanged", got)
+	}
 	for i := range reqTopo.Nodes {
 		n := reqTopo.Nodes[i]
 		if n.WireGuardPrivateKey != "" || n.WireGuardPublicKey != "" {
@@ -196,6 +201,9 @@ func TestCompile_InputTopologyUnmutated(t *testing.T) {
 	}
 	if !wrote {
 		t.Fatal("expected the compiled result.Topology to carry the key + overlay-IP write-backs")
+	}
+	if got := art.Topology.Domains[0].RoutingMode; got != "babel" {
+		t.Fatalf("compiled result domain routing mode = %q, want normalized default babel", got)
 	}
 }
 

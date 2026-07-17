@@ -28,6 +28,7 @@ import (
 //   - ErrNodeRevoked       → enroll_node_revoked (409)
 //   - ErrInvalidWGKey      → req_field_invalid {field:wg_public_key} (400)
 //   - ErrDuplicateWGKey    → duplicate_wg_key (409)
+//   - ErrTopologyChanged   → topology_changed (409)
 //
 // The cause is wrapped for errors.Is/As + logs; it never reaches the wire (apierr.Error
 // serializes only code+message+params — see internal/apierr), so wrapping is response-
@@ -55,6 +56,8 @@ func mapControllerErr(err error) *apierr.Error {
 		return apierr.New(apierr.CodeReqFieldInvalid).With("field", "wg_public_key").Wrap(err)
 	case errors.Is(err, controller.ErrDuplicateWGKey):
 		return apierr.New(apierr.CodeDuplicateWGKey).Wrap(err)
+	case errors.Is(err, controller.ErrTopologyChanged):
+		return apierr.New(apierr.CodeTopologyChanged).Wrap(err)
 	case errors.Is(err, controller.ErrTelemetryProbesRequireKeystone):
 		return apierr.New(apierr.CodeTelemetryProbesRequireKeystone).Wrap(err)
 	default:

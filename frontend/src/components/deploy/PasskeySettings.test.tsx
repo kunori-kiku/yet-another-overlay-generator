@@ -63,6 +63,7 @@ afterEach(() => {
     serverOperatorPinned: null,
     serverOperatorAlg: null,
     serverOperatorFingerprint: null,
+    deployPreview: null,
   });
 });
 
@@ -93,4 +94,24 @@ describe('PasskeySettings enrollment policy notice', () => {
       expect(operatorKeystoneMarkup).toContain(distinctiveCopy);
     },
   );
+});
+
+describe('DeployBar preview containment', () => {
+  it('keeps long rollout warnings and the confirmation controls inside a scrollable viewport', () => {
+    useControllerStore.setState({
+      deployPreview: {
+        keystoneFullRestage: false,
+        nodes: [],
+        skippedUnenrolled: [],
+        telemetryPolicyOmittedNodeIDs: ['node-' + 'x'.repeat(120)],
+      },
+    });
+
+    const markup = renderToStaticMarkup(createElement(DeployBar));
+
+    expect(markup).toContain('max-h-[calc(100dvh-2rem)]');
+    expect(markup).toContain('max-h-24 overflow-y-auto break-all');
+    expect(markup).toContain('aria-labelledby="deploy-preview-title"');
+    expect(markup).toContain('data-testid="deploy-preview-confirm"');
+  });
 });

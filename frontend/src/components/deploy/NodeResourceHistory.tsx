@@ -7,7 +7,6 @@ import { TimeSeriesChart, type TimeSeriesSeries } from '../charts/TimeSeriesChar
 import {
   effectiveExpectedStatus,
   formatProbeDestination,
-  isValidProbeURL,
   probeDisplayName,
 } from '../../lib/probeResults';
 import {
@@ -16,6 +15,7 @@ import {
   RANGE_PRESETS,
   createLatestRequestCoordinator,
   createObservedRequestScheduler,
+  configuredHistoryProbeSelector,
   formatHistoryResolution,
   granularityStep,
   historyRefreshFailed,
@@ -37,7 +37,6 @@ import {
 import type {
   Granularity,
   HistoryChartFamily,
-  HistoryProbeSelector,
   NodeHistory,
   NodeHistoryRequestOptions,
   RangePreset,
@@ -209,46 +208,12 @@ export function NodeResourceHistory({
   // selector without synchronizing a second copy of inventory into component state.
   const selectedDevice = deviceInventory?.devices.find((device) => device.seriesId === selectedDeviceID)
     ?? deviceInventory?.devices[0];
-  const selectorReady = selectedProbe !== undefined && (
-    selectedProbe.type === 'url'
-      ? isValidProbeURL(selectedProbe.url) &&
-        Number.isSafeInteger(effectiveExpectedStatus(selectedProbe)) &&
-        effectiveExpectedStatus(selectedProbe) >= 100 &&
-        effectiveExpectedStatus(selectedProbe) <= 599
-      : selectedProbe.host.length > 0 && (
-        selectedProbe.type === 'icmp' || (
-          Number.isSafeInteger(selectedProbe.port) &&
-          selectedProbe.port >= 1 &&
-          selectedProbe.port <= 65535
-        )
-      )
-  );
-
   // Fetch on mount, a parameter/exact-selector change, or a node-specific telemetry receipt. The
   // coordinator permits one request at a time, aborts a superseded key, and retains only the latest
   // same-key Live tick for a follow-up. Its callbacks are microtask-delivered, outside effect setup.
   useEffect(() => {
     const { from, to } = rangeWindow(range, Date.now());
-    let selector: HistoryProbeSelector | undefined;
-    if (selectorReady && selectedProbe) {
-      if (selectedProbe.type === 'url') {
-        selector = {
-          id: selectedProbe.id,
-          type: 'url',
-          url: selectedProbe.url,
-          expectedStatus: effectiveExpectedStatus(selectedProbe),
-        };
-      } else if (selectedProbe.type === 'tcp') {
-        selector = {
-          id: selectedProbe.id,
-          type: 'tcp',
-          host: selectedProbe.host,
-          port: selectedProbe.port,
-        };
-      } else {
-        selector = { id: selectedProbe.id, type: 'icmp', host: selectedProbe.host };
-      }
-    }
+    const selector = configuredHistoryProbeSelector(selectedProbe);
     const selectorKey = selector
       ? selector.type === 'url'
         ? `${selector.id}\u0000url\u0000${selector.url}\u0000${selector.expectedStatus}`
@@ -284,7 +249,6 @@ export function NodeResourceHistory({
     refreshAt,
     retryNonce,
     requestScheduler,
-    selectorReady,
     selectedProbe,
     selectedDevice,
   ]);
@@ -738,7 +702,14 @@ function HistoryChart({
   return (
     <div>
       <div className="mb-1 text-xs font-medium text-[var(--content-muted)]">{title}</div>
-      <TimeSeriesChart series={series} yDomain={yDomain} xDomain={xDomain} height={180} language={language} />
+      <TimeSeriesChart
+        series={series}
+        ariaLabel={title}
+        yDomain={yDomain}
+        xDomain={xDomain}
+        height={180}
+        language={language}
+      />
     </div>
   );
 }

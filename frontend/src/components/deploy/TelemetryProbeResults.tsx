@@ -140,7 +140,7 @@ export function TelemetryProbeResults({
                     <div className="text-sm font-medium text-[var(--content)]">
                       {displayName}
                     </div>
-                    <div className="mt-0.5 font-mono text-xs text-[var(--content)]">
+                    <div className="mt-0.5 break-all font-mono text-xs text-[var(--content)]">
                       {formatProbeDestination(row.descriptor)}
                     </div>
                     <div className="mt-0.5 text-xs text-[var(--content-muted)]">

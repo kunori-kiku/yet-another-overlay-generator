@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import {
   Area,
   CartesianGrid,
@@ -10,7 +10,7 @@ import {
   YAxis,
   type DotItemDotProps,
 } from 'recharts';
-import type { UILanguage } from '../../i18n';
+import { t, type UILanguage } from '../../i18n';
 import { formatTimeSeriesTick, isolatedPointTimes } from '../../lib/timeSeries';
 
 // TimeSeriesChart — a SERIES-GENERIC, theme-token-only line chart with an optional min/max band
@@ -46,6 +46,7 @@ export interface TimeSeriesSeries {
 
 export interface TimeSeriesChartProps {
   series: TimeSeriesSeries[];
+  ariaLabel?: string;
   height?: number;
   // yDomain passes straight to recharts' YAxis domain (e.g. [0, 100] for a percent metric); default
   // ['auto','auto'] lets recharts fit the data.
@@ -133,13 +134,41 @@ function ChartTooltip(props: {
   );
 }
 
-export function TimeSeriesChart({ series, height, yDomain, xDomain, language }: TimeSeriesChartProps) {
+export function TimeSeriesChart({ series, ariaLabel, height, yDomain, xDomain, language }: TimeSeriesChartProps) {
   const rows = buildRows(series);
+  const descriptionID = useId();
   const axisTick = { fill: 'var(--content-muted)', fontSize: 11 };
   const fmtTime = (v: number | string): string => formatTimeSeriesTick(v, language, xDomain);
+  const chartLabel = ariaLabel ?? t(language, 'timeSeries.chartLabel', {
+    series: series.map((item) => item.label).join(', '),
+  });
+  const accessibleSummary = series.map((item) => {
+    const averages = item.data.flatMap((point) => typeof point.avg === 'number' ? [point.avg] : []);
+    if (averages.length === 0) {
+      return t(language, 'timeSeries.noValues', { series: item.label });
+    }
+    const minima = item.data.flatMap((point) =>
+      typeof point.min === 'number' ? [point.min] : typeof point.avg === 'number' ? [point.avg] : []);
+    const maxima = item.data.flatMap((point) =>
+      typeof point.max === 'number' ? [point.max] : typeof point.avg === 'number' ? [point.avg] : []);
+    const format = (value: number) => `${value.toLocaleString(language, { maximumFractionDigits: 2 })}${item.unit}`;
+    return t(language, 'timeSeries.summary', {
+      series: item.label,
+      latest: format(averages[averages.length - 1]),
+      min: format(Math.min(...minima)),
+      max: format(Math.max(...maxima)),
+    });
+  }).join(' ');
 
   return (
-    <div data-testid="timeseries-chart" className="w-full">
+    <div
+      data-testid="timeseries-chart"
+      className="w-full"
+      role="img"
+      aria-label={chartLabel}
+      aria-describedby={descriptionID}
+    >
+      <span id={descriptionID} className="sr-only">{accessibleSummary}</span>
       {/* Legend doubles as the per-series testid surface (color swatch via inline var() token). */}
       <div className="mb-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--content-muted)]">
         {series.map((s, i) => {

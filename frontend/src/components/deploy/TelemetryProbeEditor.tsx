@@ -192,7 +192,9 @@ export function TelemetryProbeEditor({
                     >
                       {t(language, destinationMissing
                         ? 'telemetryProbes.destinationRequired'
-                        : 'telemetryProbes.urlInvalid')}
+                        : probe.type === 'url'
+                          ? 'telemetryProbes.urlInvalid'
+                          : 'telemetryProbes.hostInvalid')}
                     </p>
                   )}
                   <p id={destinationHintID} className="text-xs text-[var(--content-muted)]">

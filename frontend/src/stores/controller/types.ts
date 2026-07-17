@@ -346,7 +346,7 @@ export interface ControllerState {
   // cancelKeystoneRotate clears a pending rotate confirmation (the operator declined the rotation).
   cancelKeystoneRotate: () => void;
   // compilePreview (PR6): a server-authoritative read-only compile. POST the current canvas
-  // (private keys stripped first) → the server compiles the enrolled subgraph (no stage, no
+  // (private keys stripped first) → the server compiles the deployment-ready subgraph (no stage, no
   // persist) → set the result as compileResult (for CompilePreview / EdgeEditor to display), and
   // merge the server-computed allocations (compiled_port + pinned_*) back onto the canvas so the
   // operator can see them and adjust the NAT ip:port accordingly, then Save persists and Deploy

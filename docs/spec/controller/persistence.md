@@ -15,7 +15,7 @@ controller wiring that consumes `WaitForGeneration` for the `/poll` long-poll en
 `LookupNodeByAPIToken` for the auth chokepoint is plan-4.5; the frontend panel is plan-4.4. This document
 describes the data-access contract those sub-plans build on. See
 [../../design/controller-panel-design-spike-2026_06_07.md](../../design/controller-panel-design-spike-2026_06_07.md)
-and [../../../implementation_plans/controller-panel-2026_06_08/plan-4-2026_06_08.md](../../../implementation_plans/controller-panel-2026_06_08/plan-4-2026_06_08.md).
+and [../../../implementation_plans/_completed/controller-panel-2026_06_08/plan-4-2026_06_08.md](../../../implementation_plans/_completed/controller-panel-2026_06_08/plan-4-2026_06_08.md).
 
 ## The quarantine boundary
 
@@ -26,12 +26,13 @@ and neither holds state, talks to a database, nor knows a tenant exists. **All**
 the node registry, stored topology, staged/current bundles, the generation counter, the audit log —
 lives behind the `Store` interface in this package and nowhere else.
 
-The payoff is twofold. First, the air-gap path (`cmd/compiler`, the existing HTTP API) keeps working
-byte-for-byte: it never touches `internal/controller`, so the stateful layer cannot regress it. Second,
-any future dependency the stateful layer needs (a database driver, a KMS client) is confined to this
-one package — it can never leak into the frozen core. The controller **calls** the unchanged
-`Compile`/`render.All` against a tenant's stored, public-keys-only topology; it does not reimplement
-them.
+The payoff is twofold. First, the offline CLI and browser Go/WASM paths keep working byte-for-byte:
+they never touch `internal/controller`, and all three consumers enter through `internal/localcompile`,
+so the stateful layer cannot regress them or create a second compilation authority. Second, any
+future dependency the stateful layer needs (a database driver, a KMS client) is confined to this one
+package — it cannot leak into the core. The controller projects a tenant's stored, public-keys-only
+ready subgraph in `compile_subgraph.go`, then calls `localcompile.CompileResultCtx`; it does not
+reimplement validation, compilation, rendering, or artifact assembly.
 
 ## The Store interface and the `TenantID` chokepoint
 
@@ -73,8 +74,11 @@ The Store holds the records defined alongside the interface:
   lists retained metadata newest-first and `GetTopologyVersion` returns one retained record — the
   recovery substrate for a bad overwrite. On disk (FileStore) the history lives at
   `topology-history/<version>.json`, written **before** `topology.json` flips so a crash between the
-  two leaves only a harmless orphan entry that the next put overwrites. Stage write-backs
-  (`persistAllocations`) count as versions like any other put.
+  two leaves only a harmless orphan entry that the next put overwrites. A changed stage allocation
+  write-back (`persistAllocations`) counts as a version; a byte-identical write-back is a no-op and does
+  not consume one of the ten recovery slots. `CompareAndSetTopology(expectedVersion, json)` atomically
+  verifies the current version before that write-back and returns `ErrTopologyChanged` rather than
+  overwriting a newer operator draft.
 - **`SignedBundle`** — one node's rendered, Phase-0-signed bundle at a generation: `NodeID`,
   `Generation`, `Files` (bundle-relative path → content: `install.sh`, `wireguard/<iface>.conf`,
   `checksums.sha256`, `bundle.sig`, `signing-pubkey.pem`, `manifest.json`, …), and the `IsStaged` /
@@ -111,6 +115,15 @@ At the **topology** level the contract IS now enforced at the API boundary
 refuses any topology carrying a non-empty `wireguard_private_key` with a 400 before `PutTopology`
 runs, pinned by the perpetual guard `internal/api/topology_custody_test.go`. A stored
 `TopologyRecord` therefore cannot carry a private key via the operator API path.
+
+Saving and deploying also share one controller-level ordering boundary. Production
+`SaveTopology` and the complete `CompileAndStage` transaction acquire the same per-tenant operation
+lock. A Save therefore either commits before stage's initial topology read and participates in that
+candidate, or commits after staged-set publication and remains the next unapplied draft; it cannot
+land between compile, allocation write-back, signing, and staged-set sealing. The Store CAS remains a
+second atomic guard for allocation write-back and for alternate/direct Store users. The API maps a
+CAS conflict to registered HTTP 409 `topology_changed`, requiring the caller to review the latest
+draft rather than retry an overwrite blindly.
 
 ## The per-node API-token index
 
@@ -220,7 +233,7 @@ Durability discipline:
 Both implementations satisfy the **same Store contract** — the only differences are where the bytes
 live and the (documented) crash-durability and ctx-cancellation properties noted above.
 
-#### Known single-point limits — deferred to rc.2 / GA (plan-6, NOT fixed)
+#### Known single-point limits
 
 `FileStore` has two single-point limits that are **acceptable for the single-tenant v1 controller** and
 called out here (and in the `FileStore` doc comment) so they are not mistaken for oversights:
@@ -232,13 +245,19 @@ called out here (and in the `FileStore` doc comment) so they are not mistaken fo
    condition variable), so a promote is observed with up to ~200 ms latency and N waiting agents each
    re-stat the file. A future revision can wake waiters via a notifier.
 
-Neither is a correctness bug, and the audit-log bound above is the only persistence work plan-6 lands;
-these scaling fixes are deferred to rc.2/GA, aligned with the Postgres adapter.
+Neither is a correctness bug. They remain explicit scaling constraints for the current FileStore and
+motivate a future shared-store adapter.
 
 ## Generation, stage → promote, and the long-poll primitive
 
 The controller's deploy workflow is built on a monotonic, per-tenant **generation** counter and a
 two-step **stage → promote** that makes a fleet roll-out atomic and observable.
+
+The controller holds the per-tenant operation lock across each multi-call stage or promote. This is
+separate from each Store method's own atomicity: it prevents two stages from pruning each other's
+candidate records, prevents promote from observing a partially assembled staged set, and orders
+operator topology Save against the entire stage transaction. `ReplaceStagedSet` and its durable seal
+remain the on-disk commit boundary after that in-process serialization.
 
 - **`StageBundle`** stores a node's rendered bundle as its **staged** (not-yet-current) version.
   Staging **replaces** any prior staged bundle for that node — staging is idempotent per node, so a
@@ -265,15 +284,22 @@ two-step **stage → promote** that makes a fleet roll-out atomic and observable
 Stage → promote also gives Plan 5 its hook for **out-of-band approval + instant rollback**: approval
 gates the promote step, and rollback is re-promoting a prior bundle set — neither changes this Store
 contract. (Partial-fleet deploy — *render what's ready* — is handled **above** the Store: the
-controller filters the topology to the enrolled subgraph before calling the unchanged
+controller filters the topology to the ready deployment subgraph before calling the unchanged
 `Compile`/`render.All`, then stages the resulting per-node bundles; the Store stores whatever bundles it
 is handed.)
 
 ## Audit hash chain
 
-`AppendAudit` records an append-only `AuditEntry` per state-changing action (topology updated, bundle
-staged, promoted, node enrolled/revoked, …). Each implementation **must** chain entries via
-`chainAudit` (`internal/controller/audit.go`):
+`AppendAudit` records an append-only `AuditEntry` for selected operator, security, and lifecycle
+actions (topology updated, bundle staged, promoted, node enrolled/revoked, …). Routine node reporting
+is deliberately outside this durable chain: `/report` updates applied generation/checksum/health and
+other Fleet state, while `/telemetry` updates live observability, but neither appends a high-frequency
+content-free audit row. Older releases did append `action:"report"`; `ListAudit` must continue to
+return those legacy rows unchanged so the retained raw chain remains verifiable. The panel verifies
+that complete raw chain before hiding legacy report rows from its visible table.
+
+Each implementation **must** chain appended entries via `chainAudit`
+(`internal/controller/audit.go`):
 
 - assign **`Seq`** monotonically **per tenant**;
 - set the entry's **`Timestamp`** from the caller-provided value;
@@ -344,11 +370,11 @@ live in `internal/controller` alongside `MemStore`/`FileStore` (the quarantine b
 driver dependency confined to this package) and satisfy the same `Store` interface — a **drop-in swap**,
 since the interface is the only seam the rest of the controller knows.
 
-It is **not added now** for a concrete environment reason: Go is not installed in this development
-environment, so a new module dependency's `go.sum` entries cannot be generated, and adding a Postgres
-driver to `go.mod` would break CI. The Postgres adapter is therefore deferred to a later PR — when the
-driver can be properly vendored — and the stdlib `FileStore` is the appropriate durable backing for a
-single-tenant v1 (Postgres is a scale / multi-tenant concern, aligned with Plan 5).
+It is **not added now** because FileStore satisfies the present single-controller deployment model
+without another operational dependency, while a Postgres adapter is scale/multi-controller work that
+needs its own transaction, migration, availability, and operations design. The stdlib FileStore is
+therefore the current durable implementation; Postgres remains a future implementation of the same
+interface rather than an implicit requirement of this release.
 
 The intended adapter would use Go's stdlib **`database/sql`** with a **`pgx`** driver (`pgx/stdlib`),
 keeping the rest of the controller driver-agnostic. A brief schema sketch — every table keyed by

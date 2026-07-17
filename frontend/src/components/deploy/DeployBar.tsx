@@ -581,10 +581,11 @@ function DeployPreviewDialog({
       className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4"
       role="dialog"
       aria-modal="true"
+      aria-labelledby="deploy-preview-title"
       data-testid="deploy-preview"
     >
-      <div className="w-full max-w-lg space-y-4 rounded-lg border border-[var(--hairline)] bg-[var(--surface-elevated)] p-5">
-        <h4 className="text-base font-semibold text-[var(--accent)]">
+      <div className="max-h-[calc(100dvh-2rem)] w-full max-w-lg space-y-4 overflow-y-auto rounded-lg border border-[var(--hairline)] bg-[var(--surface-elevated)] p-5">
+        <h4 id="deploy-preview-title" className="text-base font-semibold text-[var(--accent)]">
           {t(language, 'deployBar.reviewDeploy')}
         </h4>
 
@@ -619,7 +620,7 @@ function DeployPreviewDialog({
           <div className="space-y-2">
             <p
               data-testid="deploy-telemetry-policy-omitted"
-              className="rounded border border-[var(--warning-border)] bg-[var(--warning-bg)] px-3 py-2 text-sm text-[var(--warning)]"
+              className="max-h-24 overflow-y-auto break-all rounded border border-[var(--warning-border)] bg-[var(--warning-bg)] px-3 py-2 text-sm text-[var(--warning)]"
             >
               {t(language, 'deployBar.upgradeAgentsFirstPreview', {
                 count: preview.telemetryPolicyOmittedNodeIDs.length,
@@ -629,7 +630,7 @@ function DeployPreviewDialog({
             {phaseOneRollout.kind !== 'ready' && (
               <p
                 data-testid="deploy-agent-rollout-warning"
-                className="rounded border border-[var(--danger-border)] bg-[var(--danger-bg)] px-3 py-2 text-sm text-[var(--danger)]"
+                className="max-h-24 overflow-y-auto break-all rounded border border-[var(--danger-border)] bg-[var(--danger-bg)] px-3 py-2 text-sm text-[var(--danger)]"
               >
                 {phaseOneRollout.kind === 'missing'
                   ? t(language, 'deployBar.upgradeAgentsFirstNoRollout')
@@ -680,7 +681,7 @@ function DeployPreviewDialog({
         )}
 
         {preview.skippedUnenrolled.length > 0 && (
-          <p className="text-xs text-[var(--warning)]">
+          <p className="max-h-24 overflow-y-auto break-all text-xs text-[var(--warning)]">
             {t(language, 'deployBar.skippedUnenrolled')} ({preview.skippedUnenrolled.length}):{' '}
             <span className="break-all font-mono">{preview.skippedUnenrolled.join(', ')}</span>
           </p>

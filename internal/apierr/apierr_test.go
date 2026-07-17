@@ -90,6 +90,7 @@ var allCodes = []Code{
 	CodeReqUnsupportedAlg,
 	CodeTopologyVersionNotFound,
 	CodeNoTopologyStored,
+	CodeTopologyChanged,
 	CodeKeystoneNoSignedManifest,
 	CodeNoStagedManifest,
 	CodeNoPinnedCredential,

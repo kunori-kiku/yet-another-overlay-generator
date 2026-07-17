@@ -310,7 +310,7 @@ func (c *ControllerClient) Fetch(nodeID string) (map[string][]byte, error) {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if resp.StatusCode == http.StatusNotFound {
 		// No bundle promoted for this node yet — e.g. the node is enrolled but was not
-		// in the current deploy's enrolled subgraph (render-what's-ready). The run loop
+		// in the current deploy's ready subgraph (render-what's-ready). The run loop
 		// treats this as a transient no-op (keep-last-good) and keeps polling; it is not
 		// a corruption or auth failure.
 		return nil, fmt.Errorf("agent: no bundle promoted for node %q yet", nodeID)

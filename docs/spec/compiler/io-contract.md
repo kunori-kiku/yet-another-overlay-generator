@@ -105,6 +105,8 @@ checksummed set — exactly the bytes `Checksums` and (when signing on) `Signatu
 | `install.sh` | every node | Install / uninstall script (verifies root, splices keys, applies the SNAT fix). |
 | `README.txt` | every node | Human usage and custody guidance. It is a member so an untrusted delivery cannot rewrite the AgentHeld application instructions without invalidating integrity. |
 | `artifacts.json` | when a catalog is configured | The controller-signed mimic/agent-update pins. **Omitted entirely when no catalog is configured**, so a non-catalog bundle stays byte-identical. A signed member (its pins inherit the bundle's signature + keystone digest). |
+| `telemetry.json` | AgentHeld ICMP/TCP-only policy | Optional strict version-1 active-telemetry member; omitted when no active policy exists and mutually exclusive with `telemetry-policy.json`. |
+| `telemetry-policy.json` | AgentHeld URL/device policy | Optional strict version-2 successor member; emitted whenever URL probes or automatic devices are configured and mutually exclusive with `telemetry.json`. |
 
 `bundle.sig` / `signing-pubkey.pem` (when signing on), `checksums.sha256`, and `manifest.json` are
 **not** members of the checksummed set: the first two are the authenticity layer over it,
@@ -114,7 +116,9 @@ represented separately rather than in `Files`.
 This per-node set is **single-sourced**: both the in-memory `CompileArtifacts.Files`
 (`localcompile.ArtifactsFromResult`) and the on-disk bundle (`artifacts.Export`) build it through
 the one `artifacts.BundleFiles(result, nodeID)` helper, so the relpath keys + set membership (incl.
-the `artifacts.json` D4 guard) can never drift between the two. (The helper lives in `artifacts`, a
+the optional artifacts/telemetry guards) can never drift between the two. Telemetry policy is omitted
+from AirGap custody; in AgentHeld custody either version is checksummed, optionally tier-1 signed, and
+bound by the required off-host keystone before activation. (The helper lives in `artifacts`, a
 sink package — `apierr`/`bundlesig`/`compiler` only — which `localcompile` imports freely; the
 reverse direction would cycle, since `render`'s tests depend on `artifacts` and `localcompile`
 depends on `render`.)

@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -77,6 +78,198 @@ func TestRecordTelemetrySequenced_DedupesAndSeparatesSampleFromReceiptTime(t *te
 	history, err = store.QueryTelemetryHistory(ctx, "tn", "n1", sampledAt.Add(-time.Second), secondSampledAt.Add(time.Second))
 	if err != nil || len(history) != 2 || !history[1].TS.Equal(secondSampledAt) || history[1].Load1 != 2 {
 		t.Fatalf("history after sequence 2 = %+v, err=%v", history, err)
+	}
+}
+
+func TestRecordTelemetrySequenced_ReportRaceKeepsHistoryOnce(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemStore()
+	if err := store.UpsertNode(ctx, "tn", Node{NodeID: "n1"}); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC)
+	reportAt := base.Add(2 * time.Minute)
+	if err := store.SetAppliedGeneration(ctx, "tn", "n1", 7, "sum", "ok", "report-v2", []runtimecontract.Condition{{
+		Type: runtimecontract.ConditionTypeWireGuard, Status: runtimecontract.ConditionStatusOK, Reason: "ReportWins",
+	}}, reportAt); err != nil {
+		t.Fatal(err)
+	}
+
+	// This reliable sample was received earlier but reaches the overlay after the newer report. Its
+	// latest state must lose while its independently sampled chart observation remains acknowledged.
+	if _, err := store.RecordTelemetrySequenced(ctx, "tn", "n1", nil, sequencedResourceMetric(7), "telemetry-v1",
+		"00112233445566778899aabbccddeeff", 1, base, 30*time.Second, base.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	node, err := store.GetNode(ctx, "tn", "n1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.LastAgentVersion != "report-v2" || len(node.Conditions) != 1 || node.Conditions[0].Reason != "ReportWins" {
+		t.Fatalf("older telemetry replaced newer report state: %+v", node)
+	}
+	if _, replaced := node.Telemetry[telemetrymetric.ResourceKey]; replaced {
+		t.Fatalf("older telemetry replaced live metrics after report: %v", node.Telemetry)
+	}
+	history, err := store.QueryTelemetryHistory(ctx, "tn", "n1", base.Add(-time.Second), base.Add(time.Second))
+	if err != nil || len(history) != 1 || history[0].Load1 != 7 {
+		t.Fatalf("acknowledged sample history = %+v, err=%v; want exactly one load1=7", history, err)
+	}
+}
+
+func TestAgentCapabilities_LegacyReplacementRetiresPriorSequencedBoot(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemStore()
+	if err := store.UpsertNode(ctx, "tn", Node{NodeID: "n1"}); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC)
+	bootID := "00112233445566778899aabbccddeeff"
+	capable := map[string]json.RawMessage{
+		telemetrymetric.AgentCapabilitiesKey: json.RawMessage(`{"capabilities":["telemetry-policy-v2"]}`),
+		telemetrymetric.ResourceKey:          json.RawMessage(`{"load1":1}`),
+	}
+	if _, err := store.RecordTelemetrySequenced(ctx, "tn", "n1", nil, capable, "capable-v2",
+		bootID, 1, base, 30*time.Second, base.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordTelemetry(ctx, "tn", "n1", nil, nil, "legacy-v1", base.Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RecordTelemetrySequenced(ctx, "tn", "n1", nil, capable, "delayed-v2",
+		bootID, 2, base.Add(2*time.Second), 30*time.Second, base.Add(4*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	node, err := store.GetNode(ctx, "tn", "n1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.LastAgentVersion != "legacy-v1" {
+		t.Fatalf("retired boot reclaimed live version: %q", node.LastAgentVersion)
+	}
+	if _, restored := node.Telemetry[telemetrymetric.AgentCapabilitiesKey]; restored {
+		t.Fatalf("delayed retired boot restored readiness: %v", node.Telemetry)
+	}
+}
+
+func TestAgentCapabilities_LegacyOmissionRetiresBootAfterAmbiguousClear(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemStore()
+	if err := store.UpsertNode(ctx, "tn", Node{NodeID: "n1"}); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC)
+	bootA := "00112233445566778899aabbccddeeff"
+	bootB := "ffeeddccbbaa99887766554433221100"
+	capable := map[string]json.RawMessage{
+		telemetrymetric.AgentCapabilitiesKey: json.RawMessage(`{"capabilities":["telemetry-policy-v2"]}`),
+		telemetrymetric.ResourceKey:          json.RawMessage(`{"load1":1}`),
+	}
+	if _, err := store.RecordTelemetrySequenced(ctx, "tn", "n1", nil, capable, "capable-a",
+		bootA, 1, base, 30*time.Second, base.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	// A clearly stale different boot cannot become live, but the ambiguous boundary still clears
+	// readiness fail-closed while A remains the active owner.
+	if _, err := store.RecordTelemetrySequenced(ctx, "tn", "n1", nil, nil, "stale-b",
+		bootB, 1, base.Add(-10*time.Minute), 30*time.Second, base.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordTelemetry(ctx, "tn", "n1", nil, nil, "legacy-v1", base.Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RecordTelemetrySequenced(ctx, "tn", "n1", nil, capable, "delayed-a",
+		bootA, 2, base.Add(time.Minute), 30*time.Second, base.Add(4*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	node, err := store.GetNode(ctx, "tn", "n1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.LastAgentVersion != "legacy-v1" {
+		t.Fatalf("predecessor reclaimed live version after legacy omission: %q", node.LastAgentVersion)
+	}
+	if _, restored := node.Telemetry[telemetrymetric.AgentCapabilitiesKey]; restored {
+		t.Fatalf("predecessor restored readiness after legacy omission: %v", node.Telemetry)
+	}
+}
+
+func TestAgentCapabilities_HeaderStrippedCapableHeartbeatKeepsBootOwnership(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemStore()
+	if err := store.UpsertNode(ctx, "tn", Node{NodeID: "n1"}); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC)
+	bootID := "00112233445566778899aabbccddeeff"
+	metrics := func(load int) map[string]json.RawMessage {
+		return map[string]json.RawMessage{
+			telemetrymetric.AgentCapabilitiesKey: json.RawMessage(`{"capabilities":["telemetry-policy-v2"]}`),
+			telemetrymetric.ResourceKey:          json.RawMessage(fmt.Sprintf(`{"load1":%d}`, load)),
+		}
+	}
+	if _, err := store.RecordTelemetrySequenced(ctx, "tn", "n1", nil, metrics(1), "capable-v2",
+		bootID, 1, base, 30*time.Second, base.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	// The same v2 JSON body arriving without protocol headers is the documented proxy-degrade path.
+	if err := store.RecordTelemetry(ctx, "tn", "n1", nil, metrics(2), "capable-v2", base.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RecordTelemetrySequenced(ctx, "tn", "n1", nil, metrics(3), "capable-v2",
+		bootID, 2, base.Add(3*time.Second), 30*time.Second, base.Add(4*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	node, err := store.GetNode(ctx, "tn", "n1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(node.Telemetry[telemetrymetric.ResourceKey]) != `{"load1":3}` {
+		t.Fatalf("headers returning did not resume current boot live state: %v", node.Telemetry)
+	}
+}
+
+func TestAgentCapabilities_HeaderStrippedCurrentBootReclaimsAfterAmbiguousClear(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemStore()
+	if err := store.UpsertNode(ctx, "tn", Node{NodeID: "n1"}); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC)
+	bootA := "00112233445566778899aabbccddeeff"
+	bootB := "ffeeddccbbaa99887766554433221100"
+	metrics := func(load int) map[string]json.RawMessage {
+		return map[string]json.RawMessage{
+			telemetrymetric.AgentCapabilitiesKey: json.RawMessage(`{"capabilities":["telemetry-policy-v2"]}`),
+			telemetrymetric.ResourceKey:          json.RawMessage(fmt.Sprintf(`{"load1":%d}`, load)),
+		}
+	}
+	if _, err := store.RecordTelemetrySequenced(ctx, "tn", "n1", nil, metrics(1), "boot-a",
+		bootA, 1, base, 30*time.Second, base.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	// Boot B is received as the restart successor, but its equal advisory sample time makes the
+	// boundary ambiguous and therefore clears the inherited capability advertisement fail-closed.
+	if _, err := store.RecordTelemetrySequenced(ctx, "tn", "n1", nil, metrics(2), "boot-b",
+		bootB, 1, base, 30*time.Second, base.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	// A proxy-stripped request from that same authenticated current process may restore its own
+	// canonical capability body. It must not retire B merely because the fail-closed live map is empty.
+	if err := store.RecordTelemetry(ctx, "tn", "n1", nil, metrics(3), "boot-b", base.Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RecordTelemetrySequenced(ctx, "tn", "n1", nil, metrics(4), "boot-b",
+		bootB, 2, base.Add(30*time.Second), 30*time.Second, base.Add(4*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	node, err := store.GetNode(ctx, "tn", "n1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(node.Telemetry[telemetrymetric.ResourceKey]) != `{"load1":4}` ||
+		string(node.Telemetry[telemetrymetric.AgentCapabilitiesKey]) == "" {
+		t.Fatalf("current boot did not reclaim live telemetry after fail-closed clear: %v", node.Telemetry)
 	}
 }
 

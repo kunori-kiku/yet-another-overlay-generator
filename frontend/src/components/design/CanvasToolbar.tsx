@@ -36,7 +36,7 @@ export function CanvasToolbar({
   // is hidden in controller mode (it is local file-I/O), so this is the controller persist path.
   const saveDesign = useControllerStore((s) => s.saveDesign);
   // Controller-mode Compile (PR6): a SERVER-authoritative read-only compile — POSTs the current
-  // design, the server renders the enrolled subgraph (zero-knowledge, placeholder keys), then the
+  // design, the server renders the deployment-ready subgraph (zero-knowledge, placeholder keys), then the
   // store shows the result and merges the allocated ports/IPs onto the canvas so the operator can
   // see + adjust the NAT-relevant fields and Save. This is the controller counterpart to the
   // local air-gap Compile (which is unavailable in controller mode — see the mode note above).

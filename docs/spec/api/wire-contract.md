@@ -99,6 +99,14 @@ dropped or mishandled on return/import; ✗ = not transported at all.
 | `ssh_port` | `SSHPort` | `ssh_port` | yes | ✅ | range-validated 1–65535 (D65) |
 | `ssh_user` | `SSHUser` | `ssh_user` | yes | ✅ | strict charset validated (D44) |
 | `ssh_key_path` | `SSHKeyPath` | `ssh_key_path` | yes | ✅ | |
+| `telemetry_probes` | `TelemetryProbes` | `telemetry_probes` | Fleet node detail | ✅ | optional discriminated ICMP/TCP/URL policy; display `name` is non-executable metadata |
+| `telemetry_devices` | `TelemetryDevices` | `telemetry_devices` | Fleet node detail | ✅ | optional `{mode:"all-eligible-v1"}` successor-policy opt-in |
+
+`TelemetryProbe` is a discriminated wire union. Shared fields are `id`, optional `name`, optional
+`interval_seconds`, and optional `timeout_milliseconds`; ICMP has `host`, TCP has `host` plus `port`,
+and URL has `url` plus optional `expected_status` (zero/omitted means 200). Fields belonging to the
+other destination types are omitted. `internal/wiredrift` pins these `omitempty` contracts against
+the TypeScript union so an import/save/compile round trip cannot silently drop successor policy.
 
 > **Compliance:** `Node.router_id` exists in the Go model (`topology.go:68`) but has no frontend
 > editor and is absent from the TS `Node` interface (`topology.ts`); imported topologies retain it

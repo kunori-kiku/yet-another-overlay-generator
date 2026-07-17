@@ -71,6 +71,11 @@ func TestHealCollidingPins(t *testing.T) {
 				CompiledPort: 51829, PinnedFromPort: 51900, PinnedToPort: 51829,
 				PinnedFromTransitIP: "10.10.0.9", PinnedToTransitIP: "10.10.0.10",
 				PinnedFromLinkLocal: "fe80::9", PinnedToLinkLocal: "fe80::a"},
+			// The same rule is endpoint-symmetric when the client is the to-node.
+			{ID: "cli-rev", FromNodeID: "c", ToNodeID: "cl", IsEnabled: true,
+				CompiledPort: 51830, PinnedFromPort: 51830, PinnedToPort: 51901,
+				PinnedFromTransitIP: "10.10.0.11", PinnedToTransitIP: "10.10.0.12",
+				PinnedFromLinkLocal: "fe80::b", PinnedToLinkLocal: "fe80::c"},
 		},
 	}
 
@@ -78,7 +83,7 @@ func TestHealCollidingPins(t *testing.T) {
 		t.Fatalf("HealCollidingPins reported no change, expected it to strip colliders")
 	}
 
-	kept := map[string]bool{"a-b": true, "b-a": true, "a-d": true, "dis": true, "cli": true}
+	kept := map[string]bool{"a-b": true, "b-a": true, "a-d": true, "dis": true, "cli": true, "cli-rev": true}
 	stripped := map[string]bool{"b-c": true, "a-d-bk": true}
 	for id := range kept {
 		if !hasAnyPin(edgeByID(topo.Edges, id)) {
@@ -105,6 +110,11 @@ func TestHealCollidingPins(t *testing.T) {
 	}
 	if client.CompiledPort != 51829 {
 		t.Errorf("client CompiledPort = %d, want preserved 51829", client.CompiledPort)
+	}
+	reverseClient := edgeByID(topo.Edges, "cli-rev")
+	if reverseClient.PinnedFromPort != 51830 || reverseClient.PinnedToPort != 0 {
+		t.Errorf("reverse client ports = %d/%d, want preserved/cleared 51830/0",
+			reverseClient.PinnedFromPort, reverseClient.PinnedToPort)
 	}
 
 	// Idempotent + converged: a second pass finds nothing to strip.

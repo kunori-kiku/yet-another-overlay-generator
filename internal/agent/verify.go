@@ -236,9 +236,10 @@ func VerifyBundle(files map[string][]byte, pinnedPubPEM []byte) (*VerifyResult, 
 		}
 	}
 
-	// telemetry.json is executable network policy: its destinations become outbound traffic
-	// only after apply. Presence therefore requires membership in the exact checksummed set;
-	// VerifyMembership additionally binds that set to the off-host keystone before activation.
+	// Either telemetry policy member is executable policy: probe destinations become outbound
+	// traffic and the successor member can enable local device collection only after apply.
+	// Presence therefore requires membership in the exact checksummed set; VerifyMembership
+	// additionally binds that set to the off-host keystone before activation.
 	if _, ok := files[probepolicy.FileName]; ok {
 		if _, covered := listed[probepolicy.FileName]; !covered {
 			return nil, fmt.Errorf("agent: %s present but not covered by checksums.sha256; refusing", probepolicy.FileName)

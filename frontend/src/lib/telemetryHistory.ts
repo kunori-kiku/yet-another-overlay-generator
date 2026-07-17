@@ -1,5 +1,10 @@
 import type { TelemetryProbe } from '../types/topology';
-import { isValidProbeURL } from './probeResults';
+import {
+  effectiveExpectedStatus,
+  isValidProbeID,
+  isValidProbeURL,
+  probeDestinationInvalid,
+} from './probeResults';
 import {
   deviceDefinitionsForKind,
   isDeviceKind,
@@ -142,6 +147,29 @@ export type HistoryProbeSelector = HistoryProbeSelectorBase & (
   | { type: 'tcp'; host: string; port: number; url?: never; expectedStatus?: never }
   | { type: 'url'; url: string; expectedStatus: number; host?: never; port?: never }
 );
+
+export function configuredHistoryProbeSelector(
+  probe: TelemetryProbe | undefined,
+): HistoryProbeSelector | undefined {
+  if (
+    probe === undefined ||
+    !isValidProbeID(probe.id) ||
+    (probe.type !== 'icmp' && probe.type !== 'tcp' && probe.type !== 'url') ||
+    probeDestinationInvalid(probe)
+  ) return undefined;
+  if (probe.type === 'url') {
+    const expectedStatus = effectiveExpectedStatus(probe);
+    if (!isValidProbeURL(probe.url) || !Number.isSafeInteger(expectedStatus) || expectedStatus < 100 || expectedStatus > 599) {
+      return undefined;
+    }
+    return { id: probe.id, type: 'url', url: probe.url, expectedStatus };
+  }
+  if (probe.type === 'tcp') {
+    if (!Number.isSafeInteger(probe.port) || probe.port < 1 || probe.port > 65535) return undefined;
+    return { id: probe.id, type: 'tcp', host: probe.host, port: probe.port };
+  }
+  return { id: probe.id, type: 'icmp', host: probe.host };
+}
 
 export interface HistoryDeviceSelector {
   kind: DeviceKind;

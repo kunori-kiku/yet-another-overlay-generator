@@ -9,6 +9,7 @@ import {
 } from './NodeResourceHistory';
 import {
   HISTORY_CHART_FAMILIES,
+  configuredHistoryProbeSelector,
   createLatestRequestCoordinator,
   createObservedRequestScheduler,
   historyRefreshFailed,
@@ -18,6 +19,7 @@ import {
   type HistoryChartFamily,
   type NodeHistory,
 } from '../../lib/telemetryHistory';
+import type { TelemetryProbe } from '../../types/topology';
 
 const RESOURCE_HISTORY: NodeHistory = {
   step: '30s',
@@ -134,10 +136,22 @@ describe('history chart-family renderer registry', () => {
       }));
 
       expect(html, `${family} must render TimeSeriesChart`).toContain('data-testid="timeseries-chart"');
+      expect(html, `${family} chart must expose an accessible image summary`).toContain('role="img"');
+      expect(html, `${family} chart must expose its visible title as a name`).toContain('aria-label=');
+      expect(html, `${family} chart must associate its numeric summary`).toContain('aria-describedby=');
       expect(html, `${family} must register a concrete plotted series`).toContain(
         `data-testid="${EXPECTED_SERIES[family]}"`,
       );
     }
+  });
+
+  it('summarizes the plotted values for non-visual chart readers', () => {
+    const html = renderToStaticMarkup(createElement(HistoryChartFamilySection, {
+      family: 'resource',
+      ...FAMILY_FIXTURES.resource,
+    }));
+
+    expect(html).toContain('CPU: latest 25%; minimum 20%; maximum 30%.');
   });
 
   it('shows the friendly probe name while retaining the immutable id and exact destination', () => {
@@ -250,6 +264,24 @@ describe('node history component request/state seams', () => {
     observationKey: string;
     seen: string;
   }
+
+  it('omits a malformed nonblank probe draft so resource and device history remain loadable', () => {
+    expect(configuredHistoryProbeSelector({
+      id: 'draft', type: 'icmp', host: 'https://not-a-bare-host.example/path',
+    })).toBeUndefined();
+    expect(configuredHistoryProbeSelector({
+      id: 'ready', type: 'tcp', host: 'resolver.example.', port: 53,
+    })).toEqual({ id: 'ready', type: 'tcp', host: 'resolver.example.', port: 53 });
+    expect(configuredHistoryProbeSelector({
+      id: 'bad id', type: 'icmp', host: 'resolver.example.',
+    })).toBeUndefined();
+    expect(configuredHistoryProbeSelector({
+      id: 'bad-url', type: 'url', url: 'https://service.example/%zz',
+    })).toBeUndefined();
+    expect(configuredHistoryProbeSelector({
+      id: 'future', type: 'future', host: 'resolver.example.',
+    } as unknown as TelemetryProbe)).toBeUndefined();
+  });
 
   it('does not request again when this node lastSeen is unchanged', () => {
     const request = vi.fn();

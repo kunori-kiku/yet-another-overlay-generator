@@ -15,8 +15,8 @@ primitive. This document describes the rendering contract those phases rely on.
 
 `render.GenerateKeys(topo, custody)` (`internal/render/render.go`) selects the model:
 
-- **`AirGap`** — the historical, default behavior for the air-gap CLI (`cmd/compiler`) and the
-  existing HTTP API. Private keys round-trip through the topology JSON so a stateless recompile
+- **`AirGap`** — the historical, default behavior for the offline CLI (`cmd/compiler`) and local
+  browser Go/WASM engine. Private keys round-trip through the topology JSON so a stateless recompile
   reproduces them (invariant **I5**, key stability). A node with a public key but no private key is a
   **hard error** (the stateless compiler cannot reconstruct the private key). This path is **frozen
   and byte-for-byte unchanged**.

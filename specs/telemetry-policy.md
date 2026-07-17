@@ -84,7 +84,7 @@ membership, and last-known-good activation are described in
   `internal/probepolicy/policy.go:588-609`,
   `internal/controller/telemetry_probe_name_delta_test.go:107-180`).
 - Active policy is managed-node, AgentHeld, keystone-bound authority: schema rejects manual-node
-  policy, render omits it outside AgentHeld custody, and preview/stage refuse it without the pinned
+  policy, render omits it outside AgentHeld custody, and deploy preview/stage refuse it without the pinned
   credential (`internal/validator/schema.go:346-364`, `internal/render/render.go:371-400`,
   `internal/controller/telemetry_policy.go:10-25`, `internal/controller/compile_stage.go:164-180`).
 

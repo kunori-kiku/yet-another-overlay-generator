@@ -246,6 +246,57 @@ func TestStoreTopologyVersioning(t *testing.T) {
 	}
 }
 
+// TestStoreTopologyCompareAndSet pins the atomic deploy-writeback contract across both backends:
+// a byte-identical compare checks freshness without consuming history, a changed compare advances
+// once, and a stale compiler can neither overwrite nor version the operator's newer design.
+func TestStoreTopologyCompareAndSet(t *testing.T) {
+	for _, impl := range storeImpls() {
+		impl := impl
+		t.Run(impl.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := impl.factory(t)
+
+			initial, err := s.PutTopology(ctx, tenant, []byte(`{"v":1}`))
+			if err != nil {
+				t.Fatalf("PutTopology initial: %v", err)
+			}
+			same, err := s.CompareAndSetTopology(ctx, tenant, initial.Version, []byte(`{"v":1}`))
+			if err != nil {
+				t.Fatalf("CompareAndSetTopology no-op: %v", err)
+			}
+			if same.Version != initial.Version {
+				t.Fatalf("no-op Version = %d, want %d", same.Version, initial.Version)
+			}
+
+			changed, err := s.CompareAndSetTopology(ctx, tenant, initial.Version, []byte(`{"v":2}`))
+			if err != nil {
+				t.Fatalf("CompareAndSetTopology changed: %v", err)
+			}
+			if changed.Version != initial.Version+1 {
+				t.Fatalf("changed Version = %d, want %d", changed.Version, initial.Version+1)
+			}
+			if _, err := s.CompareAndSetTopology(ctx, tenant, initial.Version, []byte(`{"v":"stale"}`)); !errors.Is(err, ErrTopologyChanged) {
+				t.Fatalf("stale CompareAndSetTopology error = %v, want ErrTopologyChanged", err)
+			}
+
+			current, err := s.GetTopology(ctx, tenant)
+			if err != nil {
+				t.Fatalf("GetTopology current: %v", err)
+			}
+			if current.Version != changed.Version || string(current.JSON) != `{"v":2}` {
+				t.Fatalf("stale compare changed current topology: %+v", current)
+			}
+			versions, err := s.ListTopologyVersions(ctx, tenant)
+			if err != nil {
+				t.Fatalf("ListTopologyVersions: %v", err)
+			}
+			if len(versions) != 2 {
+				t.Fatalf("retained versions = %d, want 2 (no-op/stale compares must not consume slots)", len(versions))
+			}
+		})
+	}
+}
+
 // TestStoreTopologyHistory covers the bounded version history (plan-2, D7):
 // every PutTopology is retained, the list is newest-first and pruned to
 // TopologyHistoryLimit, retained versions round-trip byte-exact, and pruned or

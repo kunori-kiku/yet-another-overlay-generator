@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatProbeTarget,
+  isValidProbeHost,
   isValidProbeURL,
   mapProbeResults,
   probeDisplayName,
@@ -15,21 +16,42 @@ describe('URL policy validation', () => {
     expect(isValidProbeURL('http://127.0.0.1:8080/health')).toBe(true);
     expect(isValidProbeURL('https://[::1]:8443/status?check=yes')).toBe(true);
     for (const invalid of [
-      'HTTPS://example.test/',
       'https://@example.test/',
       'https://user@example.test/',
       'https://example.test:/',
       'https://example.test:0/',
       'https://example.test:65536/',
       'https://example.test/\u0085',
+      'https://example.test/%',
+      'https://example.test/%zz',
+      'https://example.test/?q=hello world',
+      'https://[fe80::1%25eth0]/',
+      'https://%65xample.test/',
+      'https://%E2%98%83.example/',
+      'https://☃.example/',
+      'https://[example.test]/',
+      'https://[192.0.2.1]/',
     ]) {
       expect(isValidProbeURL(invalid), invalid).toBe(false);
     }
+    expect(isValidProbeURL('HTTPS://example.test/%7Eready')).toBe(true);
+    expect(isValidProbeURL('https://example.test/health?opaque=%zz')).toBe(true);
 
     expect(probeExpectedStatusInvalid({ id: 'default', type: 'url', url: 'https://example.test/' })).toBe(false);
     expect(probeExpectedStatusInvalid({ id: 'low', type: 'url', url: 'https://example.test/', expected_status: 99 })).toBe(true);
     expect(probeExpectedStatusInvalid({ id: 'high', type: 'url', url: 'https://example.test/', expected_status: 600 })).toBe(true);
     expect(probeExpectedStatusInvalid({ id: 'icmp', type: 'icmp', host: 'example.test' })).toBe(false);
+  });
+});
+
+describe('host policy validation', () => {
+  it('matches the signed bare IP-or-ASCII-DNS boundary', () => {
+    for (const valid of ['192.0.2.1', '2001:db8::1', '::ffff:192.0.2.1', '2001:db8::192.0.2.1', 'resolver', 'resolver.example.', '192.168.001.1']) {
+      expect(isValidProbeHost(valid), valid).toBe(true);
+    }
+    for (const invalid of ['2001:::1', '192.0.2.1::', '1.2.3.4::', 'https://resolver.example/', '-bad.example', 'bad..name', 'bad name']) {
+      expect(isValidProbeHost(invalid), invalid).toBe(false);
+    }
   });
 });
 

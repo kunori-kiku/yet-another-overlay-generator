@@ -550,7 +550,11 @@ type nodeHist struct {
 	// appended it is true and queries read that batch from disk instead, so logical-cap accounting never
 	// spends two slots on the same observation.
 	inflightOnDisk bool
-	fileLines      int
+	// flushEpoch changes at every in-flight drain/commit/clear/requeue transition. Queries compare
+	// the epoch around their disk scan and retry if the scan crossed a transition, preventing a newly
+	// durable duplicate batch from consuming suffix slots reserved for its volatile copy.
+	flushEpoch uint64
+	fileLines  int
 	// recentProbeKeys is an in-memory exact-attempt deduper for overlapping probe_samples windows and
 	// repeated rc.9 probe_results snapshots. It is bounded and deliberately not loaded from disk on the
 	// heartbeat path; query-time dedupe covers the first repeated snapshot after controller restart.
@@ -579,6 +583,12 @@ type telemetryHistory struct {
 	flushMu sync.Mutex
 	// writeBatch is an injected seam for deterministic drain/write visibility tests.
 	writeBatch func(TenantID, string, []telemetryHistoryRecord, int) error
+	// beforeDiskRead is an injected test seam used to place a flush commit between a query's volatile
+	// snapshot and durable scan. Production leaves it nil.
+	beforeDiskRead func()
+	// afterQueryCapRead is an injected test seam used to place a cap publication before the query's
+	// volatile snapshot. Production leaves it nil.
+	afterQueryCapRead func()
 
 	capMu       sync.RWMutex
 	capByTenant map[TenantID]int
@@ -677,6 +687,10 @@ func (h *telemetryHistory) applyCapChange(t TenantID, cap int) {
 	h.mu.Lock()
 	if byNode := h.nodes[t]; byNode != nil {
 		for _, entry := range byNode {
+			// A query may already have snapshotted this tenant's former logical cap. Advance the
+			// same coherence epoch used by flush transitions before trimming the volatile suffix;
+			// a disk scan crossing this boundary will retry against one complete retention policy.
+			entry.flushEpoch++
 			trimTelemetryHistoryBuffer(entry, cap, h.volatileByteLimit()-entry.inflightBytes)
 		}
 	}
@@ -1071,6 +1085,7 @@ func (h *telemetryHistory) flushOnce() {
 			e.inflight = e.buf
 			e.inflightBytes = e.bufBytes
 			e.inflightOnDisk = false
+			e.flushEpoch++
 			e.buf = nil
 			e.bufBytes = 0
 			jobs = append(jobs, flushJob{t: t, nodeID: nodeID, samples: e.inflight})
@@ -1100,6 +1115,7 @@ func (h *telemetryHistory) clearInflight(t TenantID, nodeID string) {
 	e.inflight = nil
 	e.inflightBytes = 0
 	e.inflightOnDisk = false
+	e.flushEpoch++
 }
 
 // requeueInflight atomically moves the failed in-flight batch back to the FRONT of the buffer. The
@@ -1116,6 +1132,7 @@ func (h *telemetryHistory) requeueInflight(t TenantID, nodeID string, cap int) {
 	e.inflight = nil
 	e.inflightBytes = 0
 	e.inflightOnDisk = false
+	e.flushEpoch++
 	e.buf = requeued
 	e.bufBytes = requeuedBytes
 	trimTelemetryHistoryBuffer(e, cap, h.volatileByteLimit())
@@ -1547,6 +1564,7 @@ func (h *telemetryHistory) markInflightOnDisk(t TenantID, nodeID string, samples
 	// helper/test write from accidentally marking an unrelated in-flight batch durable.
 	if len(e.inflight) > 0 && &e.inflight[0] == &samples[0] {
 		e.inflightOnDisk = true
+		e.flushEpoch++
 	}
 }
 
@@ -1686,17 +1704,39 @@ func (h *telemetryHistory) queryRecordsWithFilterContext(ctx context.Context, t 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	for {
+		records, stable, err := h.queryRecordsSnapshotWithFilterContext(ctx, t, nodeID, from, to, filter)
+		if err != nil {
+			return nil, err
+		}
+		if stable {
+			return records, nil
+		}
+		// A flush crossed the volatile snapshot/disk-read boundary. Retry from a fresh coherent epoch;
+		// transitions are finite and the request context remains authoritative if storage stalls.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+}
+
+func (h *telemetryHistory) queryRecordsSnapshotWithFilterContext(ctx context.Context, t TenantID, nodeID string, from, to time.Time, filter telemetryHistoryFilter) ([]telemetryHistoryRecord, bool, error) {
 	cap := h.capFor(t)
 	if cap <= 0 {
-		return nil, nil
+		return nil, true, nil
+	}
+	if h.afterQueryCapRead != nil {
+		h.afterQueryCapRead()
 	}
 
 	// Snapshot only the newest logical volatile suffix. inflight is included until its exact slice has
 	// reached disk; afterwards inflightOnDisk makes disk the sole source during flush completion.
 	var volatileRaw []telemetryHistoryRecord
+	var snapshotFlushEpoch uint64
 	h.mu.Lock()
 	if byNode := h.nodes[t]; byNode != nil {
 		if e := byNode[nodeID]; e != nil {
+			snapshotFlushEpoch = e.flushEpoch
 			includeInflight := !e.inflightOnDisk
 			volatileCount := len(e.buf)
 			if includeInflight {
@@ -1720,14 +1760,14 @@ func (h *telemetryHistory) queryRecordsWithFilterContext(ctx context.Context, t 
 	}
 	h.mu.Unlock()
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	volatile := make([]telemetryHistoryRecord, 0, len(volatileRaw))
 	for i, record := range volatileRaw {
 		if i%128 == 0 {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return nil, false, err
 			}
 		}
 		record = filterTelemetryHistoryRecord(record, filter)
@@ -1744,18 +1784,35 @@ func (h *telemetryHistory) queryRecordsWithFilterContext(ctx context.Context, t 
 	if h.dir != "" && diskLimit > 0 {
 		p, err := h.nodeFile(t, nodeID)
 		if err != nil {
-			return nil, err
+			return nil, false, err
+		}
+		if h.beforeDiskRead != nil {
+			h.beforeDiskRead()
 		}
 		disk, err := readHistoryJSONLTail(ctx, p, from, to, diskLimit, h.fileByteLimit(), filter)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		out = disk
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return append(out, volatile...), nil
+	// If an in-flight batch became durable (or was cleared/requeued) after the volatile snapshot,
+	// diskLimit may have counted one physical copy as a distinct logical suffix. Retry instead of
+	// publishing a transiently shortened chart. A later transition starts a new linearization point.
+	h.mu.Lock()
+	currentFlushEpoch := uint64(0)
+	if byNode := h.nodes[t]; byNode != nil {
+		if e := byNode[nodeID]; e != nil {
+			currentFlushEpoch = e.flushEpoch
+		}
+	}
+	h.mu.Unlock()
+	// setCap publishes through capMu before it can take history.mu to advance flushEpoch. Requiring
+	// the exact cap as well closes the small window where this query read the old cap, then snapped
+	// the new epoch after trimming and would otherwise mistake that mixed policy for a stable view.
+	return append(out, volatile...), currentFlushEpoch == snapshotFlushEpoch && h.capFor(t) == cap, nil
 }
 
 func filterTelemetryHistoryRecord(record telemetryHistoryRecord, filter telemetryHistoryFilter) telemetryHistoryRecord {

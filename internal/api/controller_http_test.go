@@ -1286,7 +1286,7 @@ func TestControllerHTTP_UpdateTopologyHealsCollidingPins(t *testing.T) {
 }
 
 // TestControllerHTTP_CompilePreview covers the read-only, server-authoritative compile
-// preview (PR6): it renders the enrolled subgraph and returns the configs + allocated ports,
+// preview (PR6): it renders the deployment-ready subgraph and returns the configs + allocated ports,
 // preserves zero-knowledge custody (placeholder private keys only), and has NO side effects —
 // it neither persists allocation pins back into the stored topology nor stages any bundle.
 func TestControllerHTTP_CompilePreview(t *testing.T) {

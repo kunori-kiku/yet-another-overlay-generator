@@ -1,6 +1,6 @@
 package controller
 
-// compile_stage.go — CompileAndStage (compile the enrolled subgraph, export, and stage
+// compile_stage.go — CompileAndStage (compile the ready subgraph, export, and stage
 // per-node bundles at the next generation) plus its force-option machinery and the
 // stage-path audit helper. Split from compile.go (plan-2).
 
@@ -19,7 +19,7 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/normalize"
 )
 
-// CompileAndStage renders the enrolled subgraph of the stored topology into signed
+// CompileAndStage renders the ready subgraph of the stored topology into signed
 // per-node bundles and stages them at the next generation. When the keystone is ON it
 // also builds the off-host-signable membership manifest (binding each node's bundle
 // digest) and stores it as the staged, UNSIGNED manifest — staging never requires a
@@ -28,11 +28,11 @@ import (
 // The flow:
 //
 //  1. Load the stored topology (ErrNotFound → empty result, no error).
-//  2. Build the enrolled subgraph; drop edges to unenrolled peers. Zero enrolled →
+//  2. Build the ready subgraph; drop edges whose endpoints are not ready. Zero ready →
 //     empty result, no error.
 //  3. GenerateKeys(AgentHeld) → Compile → render.All on the subgraph.
 //  4. Export to a temp dir (removed on return) — WITHOUT any trust-list files.
-//  5. Read every enrolled node's exported dir into memory and select the exact changed set.
+//  5. Read every ready node's exported dir into memory and select the exact changed set.
 //  6. KEYSTONE ON: compute every ready node's bundle digest (including unchanged nodes
 //     retained by delta-skip) and assemble the unsigned monotonic-epoch manifest.
 //  7. ReplaceStagedSet writes/prunes all candidate records and publishes its durable seal LAST.
@@ -52,7 +52,7 @@ type stageConfig struct {
 	telemetryPolicyMode TelemetryPolicyDeployMode
 }
 
-// WithForceAll re-stages EVERY enrolled node even if unchanged (fleet-wide force redeploy).
+// WithForceAll re-stages EVERY ready node even if unchanged (fleet-wide force redeploy).
 func WithForceAll() StageOption { return func(c *stageConfig) { c.forceAll = true } }
 
 // WithForceNodes re-stages the named nodes even if unchanged (per-node force redeploy).
@@ -111,7 +111,7 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	// healthy fleets see zero drift. Complements the update-topology write-path heal (clean on save).
 	normalize.HealCollidingPins(&topo)
 
-	// (2)+(3) Build the enrolled subgraph and drive the frozen compile pipeline
+	// (2)+(3) Build the ready subgraph and drive the frozen compile pipeline
 	// (AgentHeld keys → compile → render) via the shared CompileSubgraph helper. Readiness is
 	// preflighted below so the empty cleanup path runs before any signing-key dependency.
 	nodes, err := store.ListNodes(ctx, t)
@@ -189,10 +189,9 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	}
 
 	// Persist the compiled allocation pins back into the FULL stored topology so a later
-	// re-compile sticky-pins them (invariant I10). rec.JSON is passed so a write-back
-	// that changes NOTHING (sticky pins re-derived byte-identically) is skipped instead
-	// of burning one of the bounded history slots.
-	if err := persistAllocations(ctx, store, t, &topo, result.Topology, rec.JSON); err != nil {
+	// re-compile sticky-pins them (invariant I10). The versioned Store compare rejects a save that
+	// won before this commit point; a byte-identical write-back does not consume a history slot.
+	if err := persistAllocations(ctx, store, t, &topo, result.Topology, rec.Version); err != nil {
 		return StageResult{}, err
 	}
 

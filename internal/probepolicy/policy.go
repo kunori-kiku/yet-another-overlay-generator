@@ -115,8 +115,8 @@ type successorPolicyWire struct {
 	Devices *devicePolicyWire    `json:"devices,omitempty"`
 }
 
-// successorProbeWire is deliberately separate from executableProbeWire even while their Plan-4
-// fields match. Future successor-only probe fields must not touch the frozen telemetry.json v1 DTO.
+// successorProbeWire is deliberately separate from executableProbeWire. URL and expected-status
+// fields are successor-only and must never touch the frozen telemetry.json v1 DTO.
 type successorProbeWire struct {
 	ID                  string `json:"id"`
 	Type                string `json:"type"`
@@ -533,6 +533,23 @@ func ValidateURL(raw string) error {
 			return fmt.Errorf("must not contain control characters")
 		}
 	}
+	if strings.Contains(raw, " ") {
+		return fmt.Errorf("must not contain literal spaces")
+	}
+	authorityStart := strings.Index(raw, "://")
+	if authorityStart < 0 {
+		return fmt.Errorf("must be an absolute http or https URL")
+	}
+	authority := raw[authorityStart+3:]
+	if end := strings.IndexAny(authority, "/?#"); end >= 0 {
+		authority = authority[:end]
+	}
+	// Keep the signed destination portable across Go's net/url parser and the browser's WHATWG URL
+	// parser. Authority escapes may be normalized into a different hostname, and IPv6 zones use the
+	// same syntax, so neither belongs in this deliberately narrow ASCII-DNS/IP contract.
+	if strings.Contains(authority, "%") {
+		return fmt.Errorf("must not escape the URL authority or include an IPv6 zone identifier")
+	}
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		return fmt.Errorf("parse: %w", err)
@@ -542,6 +559,13 @@ func ValidateURL(raw string) error {
 	}
 	if parsed.Host == "" || parsed.Hostname() == "" {
 		return fmt.Errorf("must include a host")
+	}
+	hostname := parsed.Hostname()
+	if !ValidHost(hostname) {
+		return fmt.Errorf("host must be an IPv4 address, IPv6 address, or ASCII DNS hostname")
+	}
+	if strings.HasPrefix(authority, "[") && (net.ParseIP(hostname) == nil || !strings.Contains(hostname, ":")) {
+		return fmt.Errorf("bracketed host must be an IPv6 address")
 	}
 	if parsed.User != nil {
 		return fmt.Errorf("must not include user information")

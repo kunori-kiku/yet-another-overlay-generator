@@ -156,6 +156,41 @@ test('POSITIVE: deploy-preview endpoint fault → "Deploy anyway" fallback keeps
   expect(faults.count('deploy-preview', 'POST'), 'the preview POST was attempted').toBeGreaterThanOrEqual(1)
 })
 
+test('deploy-preview validation failure blocks deployment and never offers "Deploy anyway"', async (
+  { page, context },
+  testInfo,
+) => {
+  await seedEnrolledOnDeploy(page, context, testInfo)
+  const faults = await installFaults(page, [{
+    route: 'deploy-preview',
+    method: 'POST',
+    status: 422,
+    body: JSON.stringify({
+      error: {
+        code: 'topology_validation_failed',
+        message: 'topology validation failed',
+        params: {
+          field: 'nodes[0].telemetry_probes',
+          validation_code: 'validation_node_telemetry_probes_invalid',
+          validation_message: 'Invalid active telemetry configuration',
+          validation_param_detail: 'probe "unfinished" has invalid host ""',
+        },
+      },
+    }),
+  }])
+
+  await page.getByRole(deployButton.role, { name: deployButton.name }).click()
+
+  await expect(errorBanner(page)).toContainText('Deployment blocked', { timeout: 15_000 })
+  await expect(errorBanner(page)).toContainText('Invalid active telemetry configuration')
+  await expect(errorBanner(page)).toContainText('invalid host')
+  await expect(page.getByTestId('deploy-anyway')).toBeHidden()
+  await expect(page.getByTestId('deploy-preview')).toBeHidden()
+  await expect(page.getByRole(deployButton.role, { name: deployButton.name })).toBeEnabled()
+  expect(faults.count('stage', 'POST'), 'stage must not run after preview validation failed').toBe(0)
+  expect(faults.count('promote', 'POST'), 'promote must not run after preview validation failed').toBe(0)
+})
+
 // NOTE on the keystone-ON trustlist-signature step: a fault there drives the SAME deploy() catch as
 // the getTrustlist-500 leg above (abort BEFORE promote, coherent error, Deploy re-enabled) — `signing`
 // is already cleared by the inner finally before the signature POST, so there is no signing-flag-

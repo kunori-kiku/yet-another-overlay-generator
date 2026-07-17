@@ -1,7 +1,7 @@
 package api
 
 // handler_deploy.go holds the operator deploy/stage flow handlers: compile+stage the
-// enrolled subgraph (stage), the read-only deploy/compile previews, and promote staged->current.
+// ready subgraph (stage), the read-only deploy/compile previews, and promote staged->current.
 // All four are routed through the op() adapter (routes_controller.go), which applies the
 // method guard + structural identity() check before the body runs.
 
@@ -17,7 +17,7 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 )
 
-// HandleStage compiles the enrolled subgraph of the stored topology into per-node
+// HandleStage compiles the ready subgraph of the stored topology into per-node
 // bundles staged at the next generation (operator-only). It returns the StageResult.
 func (h *ControllerHandler) HandleStage(ctx context.Context, tenant controller.TenantID, _ string, _ http.ResponseWriter, r *http.Request) (any, *apierr.Error) {
 	// Optional force override (plan-6): an empty body = no force; force_all re-stages every node,
@@ -64,7 +64,7 @@ func (h *ControllerHandler) HandleStage(ctx context.Context, tenant controller.T
 	}, nil
 }
 
-// HandleDeployPreview is the plan-6 read-only dry-run: it reports which enrolled nodes a Deploy WOULD
+// HandleDeployPreview is the plan-6 read-only dry-run: it reports which ready nodes a Deploy WOULD
 // re-stage (changed vs served) vs skip (unchanged), plus the keystone-full-restage flag — WITHOUT
 // staging. It compiles the POSTed CURRENT canvas (what a Deploy pushes+stages), not the stored copy.
 // The Deploy dialog calls it on open so the operator sees "N updated, M unchanged" (and any pending
@@ -107,8 +107,8 @@ func (h *ControllerHandler) HandleDeployPreview(ctx context.Context, tenant cont
 	}, nil
 }
 
-// HandleCompilePreview compiles the enrolled subgraph of the POSTed current design and returns
-// the rendered configs + the skipped (unenrolled) node IDs — WITHOUT staging, persisting pins,
+// HandleCompilePreview compiles the ready subgraph of the POSTed current design and returns
+// the rendered configs + the skipped managed-node IDs — WITHOUT staging, persisting pins,
 // exporting bundles, or writing the audit log (operator-only). It is the read-only, server-
 // authoritative compile the panel's "Compile" button drives in controller mode: the operator
 // sees the server-computed allocation (ports, transit IPs, link-locals) and the full wg/babel/
@@ -122,8 +122,8 @@ func (h *ControllerHandler) HandleCompilePreview(ctx context.Context, tenant con
 	// Compile the POSTed CURRENT design (the canvas the operator is editing) — NOT the stored
 	// copy — so the operator can compile before saving ("Compile → adjust the NAT ip:port →
 	// Save"). The body is public-keys-only (the panel strips private keys); enrollment and
-	// public keys come from the registry via CompileSubgraph → enrolledSubgraph, so the POSTed
-	// key fields are never trusted (and GenerateKeys(AgentHeld) emits placeholder private keys).
+	// managed public keys come from the registry while manual-node public keys come from validated
+	// topology fields; GenerateKeys(AgentHeld) always emits placeholder private keys.
 	topo, err := readTopology(w, r)
 	if err != nil {
 		return nil, codedErr(apierr.CodeReqInvalidBody, err)
@@ -142,7 +142,7 @@ func (h *ControllerHandler) HandleCompilePreview(ctx context.Context, tenant con
 		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 
-	// The COMPILE HALF only — enrolled subgraph → AgentHeld keys → compile → render — with no
+	// The COMPILE HALF only — ready subgraph → AgentHeld keys → compile → render — with no
 	// persistAllocations / Export / StageBundle / Prune / manifest / audit. That absence of
 	// side effects is exactly what distinguishes a preview from a deploy.
 	pfs := controller.BuildFetchSettings(cs.WithDefaults())
@@ -158,7 +158,7 @@ func (h *ControllerHandler) HandleCompilePreview(ctx context.Context, tenant con
 		return nil, codedErr(apierr.CodeInternal, err)
 	}
 	if result == nil {
-		// Nothing enrolled yet: report the skipped set so the panel can say "no node enrolled".
+		// Nothing is deployment-ready yet: report the skipped managed set for panel guidance.
 		return compilePreviewResponseJSON{SkippedUnenrolled: skipped}, nil
 	}
 	return compilePreviewResponseJSON{
