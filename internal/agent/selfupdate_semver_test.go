@@ -24,7 +24,9 @@ func TestReconcileSelfUpdate_VlessTargetSemverMatch(t *testing.T) {
 		mustSave(t, stateDir, &State{NodeID: "n1", AgentVersionFloor: "1.0.0", PendingUpdate: &PendingUpdate{From: "1.0.0", To: "2.0.0"}})
 
 		// buildVersion carries the released "v" prefix; the operator target omitted it.
-		ReconcileSelfUpdatePromote(stateDir, "v2.0.0", func() error { return nil }, io.Discard)
+		if err := ReconcileSelfUpdatePromote(stateDir, "v2.0.0", func() error { return nil }, io.Discard); err != nil {
+			t.Fatalf("promote: %v", err)
+		}
 		st, _ := LoadState(stateDir)
 		if st.PendingUpdate == nil || !st.PendingUpdate.Confirmed {
 			t.Fatalf("v-less target must be recognized as the running build and health-confirmed (probation); got %+v", st.PendingUpdate)
@@ -46,32 +48,39 @@ func TestReconcileSelfUpdate_VlessTargetSemverMatch(t *testing.T) {
 		}
 	})
 
-	t.Run("unhealthy v-less target: rolls back + abandons (not silently wedged)", func(t *testing.T) {
+	t.Run("unhealthy v-less target: retains breadcrumb for bounded retry", func(t *testing.T) {
 		dir := t.TempDir()
 		self := filepath.Join(dir, "yaog-agent")
 		_ = os.WriteFile(self, []byte("NEW-BROKEN"), 0o755)
 		_ = os.WriteFile(self+".bak", []byte("OLD-GOOD"), 0o755)
 		stateDir := filepath.Join(dir, "state")
-		mustSave(t, stateDir, &State{NodeID: "n1", AgentVersionFloor: "1.0.0", PendingUpdate: &PendingUpdate{From: "1.0.0", To: "2.0.0"}})
+		mustSave(t, stateDir, &State{NodeID: "n1", AgentVersionFloor: "1.0.0", PendingUpdate: &PendingUpdate{From: "1.0.0", To: "2.0.0", Attempts: 1}})
 
 		execed, restore := stubSwap(t, self)
 		defer restore()
-		ReconcileSelfUpdatePromote(stateDir, "v2.0.0", func() error { return fmt.Errorf("poll failed") }, io.Discard)
+		healthCalls := 0
+		err := ReconcileSelfUpdatePromote(stateDir, "v2.0.0", func() error {
+			healthCalls++
+			return fmt.Errorf("poll failed")
+		}, io.Discard)
 
 		// Before the fix: buildVersion "v2.0.0" != pu.To "2.0.0" → the "swap never applied" branch → NO
-		// health gate, NO rollback (breadcrumb persists, channel wedged). After: it rolls back.
-		if *execed != self {
-			t.Errorf("v-less unhealthy target must roll back + re-exec the restored binary")
+		// health gate and a wedged channel. After: it enters the same bounded retry path as an exact match.
+		if err == nil || healthCalls != 1 {
+			t.Fatalf("v-less unhealthy target did not run the retryable health gate: calls=%d err=%v", healthCalls, err)
 		}
-		if got, _ := os.ReadFile(self); string(got) != "OLD-GOOD" {
-			t.Errorf("binary not rolled back; content=%q", got)
+		if *execed != "" {
+			t.Errorf("first v-less health failure must not roll back/re-exec: %q", *execed)
+		}
+		if got, _ := os.ReadFile(self); string(got) != "NEW-BROKEN" {
+			t.Errorf("first health failure replaced the retrying binary; content=%q", got)
 		}
 		st, _ := LoadState(stateDir)
-		if st.PendingUpdate != nil {
-			t.Errorf("breadcrumb must clear after rollback")
+		if st.PendingUpdate == nil || st.PendingUpdate.To != "2.0.0" {
+			t.Errorf("v-less target retry must retain its breadcrumb; got %+v", st.PendingUpdate)
 		}
-		if st.AbandonedAgentVersion != "2.0.0" {
-			t.Errorf("rollback must remember the abandoned (v-less) target to prevent re-arm; got %q", st.AbandonedAgentVersion)
+		if st.AbandonedAgentVersion != "" {
+			t.Errorf("first v-less health failure abandoned prematurely; got %q", st.AbandonedAgentVersion)
 		}
 	})
 }

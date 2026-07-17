@@ -381,25 +381,27 @@ func reconcileSelfUpdateEarlyLocked(stateDir, buildVersion string, stderr io.Wri
 // health-gates a swapped binary. It runs AFTER ReconcileSelfUpdateEarly (Attempts already bumped).
 // No breadcrumb ⇒ no-op. When the running build IS the target:
 //   - not yet Confirmed: run healthCheck; a pass marks the update PROBATIONARY (Confirmed, .bak
-//     kept, floor NOT yet advanced) so the daemon proceeds; a failure rolls back.
-//   - already Confirmed: it passed the gate on a PRIOR boot but rebooted before finalizing — it
-//     crashed during probation — so roll back.
+//     kept, floor NOT yet advanced) so the daemon proceeds; a failure returns an error while keeping
+//     the breadcrumb + .bak so the supervisor restarts the target and retries. Phase A's persisted
+//     attempt ceiling performs the eventual rollback + abandonment after repeated failed boots.
+//   - already Confirmed: it passed the gate on a PRIOR boot but rebooted before finalizing, so it
+//     resumes probation; repeated boots that never finalize remain bounded by Phase A's ceiling.
 //
 // The promote is FINALIZED (floor advanced, .bak dropped, breadcrumb cleared) by FinalizeSelfUpdate
 // once the new binary completes a full daemon cycle — proving it can actually run, not merely pass
 // `version` + a fetch/verify. healthCheck is injected (a Fetch + VerifyBundle in production) so
 // this is unit-testable.
-func ReconcileSelfUpdatePromote(stateDir, buildVersion string, healthCheck func() error, stderr io.Writer) {
+func ReconcileSelfUpdatePromote(stateDir, buildVersion string, healthCheck func() error, stderr io.Writer) error {
 	st, err := LoadState(stateDir)
 	if err != nil || st == nil || st.PendingUpdate == nil {
-		return
+		return nil
 	}
 	pu := st.PendingUpdate
 	if !sameVersion(buildVersion, pu.To) {
 		// Swap/exec never took effect (or we are mid-rollback): Phase A bounds it via Attempts.
 		fmt.Fprintf(stderr, "agent: pending self-update to %s not applied (running %s, attempt %d/%d)\n",
 			pu.To, buildVersion, pu.Attempts, maxSelfUpdateAttempts)
-		return
+		return nil
 	}
 	if pu.Confirmed {
 		// Health-confirmed on a PRIOR boot but rebooted before finalizing. Do NOT roll back here:
@@ -408,18 +410,29 @@ func ReconcileSelfUpdatePromote(stateDir, buildVersion string, healthCheck func(
 		// probation — the daemon retries finalize on its next cycle. A genuinely-crashing binary
 		// never finalizes and is bounded by Phase A's Attempts cap (which rolls back + abandons).
 		fmt.Fprintf(stderr, "agent: self-update to %s resuming probation (attempt %d/%d)\n", pu.To, pu.Attempts, maxSelfUpdateAttempts)
-		return
+		return nil
 	}
 	if err := healthCheck(); err != nil {
-		rollbackAndAbandon(stateDir, buildVersion, pu, "health gate failed: "+err.Error(), stderr)
-		return
+		// A single transport failure (EOF, timeout, reset, transient 5xx) says nothing about whether the
+		// new binary is viable. Keep both the pending breadcrumb and rollback backup, return failure so
+		// systemd restarts us, and let Phase A's already-durable Attempts counter bound the retries. The
+		// next boot rolls back + abandons only after the common maxSelfUpdateAttempts ceiling is exceeded.
+		fmt.Fprintf(stderr,
+			"agent: self-update to %s health gate failed on attempt %d/%d (%v); keeping rollback backup and retrying after restart\n",
+			pu.To, pu.Attempts, maxSelfUpdateAttempts, err)
+		return fmt.Errorf("self-update to %s health gate attempt %d/%d failed: %w", pu.To, pu.Attempts, maxSelfUpdateAttempts, err)
 	}
 	// Health-confirmed: begin PROBATION. Keep .bak + breadcrumb and do NOT advance the floor yet;
 	// FinalizeSelfUpdate promotes once a full daemon cycle proves the binary runs.
 	pu.Confirmed = true
 	st.Health = "self-update to " + pu.To + " health-confirmed (probationary)"
-	_ = SaveState(stateDir, st)
+	if err := SaveState(stateDir, st); err != nil {
+		// Do not proceed as though the gate was confirmed when that transition is not durable. Returning
+		// makes the supervisor retry under the same bounded startup-attempt ceiling.
+		return fmt.Errorf("persist self-update health confirmation: %w", err)
+	}
 	fmt.Fprintf(stderr, "agent: self-update to %s health-confirmed; probationary until one clean cycle\n", pu.To)
+	return nil
 }
 
 // FinalizeSelfUpdate promotes a Confirmed (probationary) self-update once the new binary has
@@ -462,8 +475,9 @@ func FinalizeSelfUpdate(stateDir, buildVersion string, stderr io.Writer) {
 	fmt.Fprintf(stderr, "agent: self-update to %s finalized after a clean cycle (floor=%s)\n", pu.To, pu.To)
 }
 
-// rollbackAndAbandon is the shared failure path for every doomed self-update (cap exceeded, health
-// gate failed, crashed during probation): when running the failed target with a .bak available it
+// rollbackAndAbandon is the shared failure path for a self-update that exceeded the bounded startup
+// attempt ceiling (swap never took effect, repeated health-gate failures, or probation crashes): when
+// running the failed target with a .bak available it
 // restores the prior binary and re-execs it; otherwise it stays on the current (from) binary and
 // reports unhealthy. It records AbandonedAgentVersion so decideSelfUpdate will not re-arm the SAME
 // target (no perpetual flap) until the operator moves to a different version. Crash-safe ordering:

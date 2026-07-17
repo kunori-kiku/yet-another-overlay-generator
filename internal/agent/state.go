@@ -91,14 +91,14 @@ type State struct {
 	AgentVersionFloor string `json:"agent_version_floor,omitempty"`
 	// PendingUpdate is the crash-durable breadcrumb written just before an agent self-update
 	// swaps and re-execs (plan-9). Its presence on startup means a swap is in flight and the
-	// reconcile must resolve it (promote on health, rollback on failure, abandon at the
-	// attempt cap) — this is what bounds the systemd Restart=always loop without a unit-file
-	// change. Nil when no update is in flight.
+	// reconcile must resolve it (promote on health, retain it across retryable failed health
+	// boots, then roll back + abandon at the attempt cap) — this is what bounds the systemd
+	// Restart=always loop without a unit-file change. Nil when no update is in flight.
 	PendingUpdate *PendingUpdate `json:"pending_update,omitempty"`
 	// AbandonedAgentVersion is the last self-update target that was abandoned (rolled back at the
 	// attempt cap). decideSelfUpdate refuses to re-arm this exact version, so a doomed target does
-	// not perpetually re-flap; it is cleared when the operator moves to a different target. Empty
-	// means nothing abandoned.
+	// not perpetually re-flap; a successfully finalized different target clears it. Empty means
+	// nothing abandoned.
 	AbandonedAgentVersion string `json:"abandoned_agent_version,omitempty"`
 	// AbandonedReason is the CURATED (never raw stderr), durable reason the last self-update was
 	// abandoned — surfaced in the terminal `selfupdate` Abandoned condition so the panel shows WHY the

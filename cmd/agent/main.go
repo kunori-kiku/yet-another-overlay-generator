@@ -988,8 +988,9 @@ func runControllerMode(o controllerModeOpts) int {
 	// swapped binary. The gate is one clean Fetch + VerifyBundle — it proves THIS (possibly
 	// just-swapped) binary can reach the controller and cryptographically verify a bundle. A pass
 	// marks the update PROBATIONARY (FinalizeSelfUpdate promotes it after the first clean cycle
-	// below); a failure (or a reboot during probation) rolls back to the prior binary. No-op
-	// without a breadcrumb.
+	// below); a failure leaves the breadcrumb + rollback backup intact and exits so systemd retries
+	// under the persisted three-attempt ceiling. Only exhausting that ceiling rolls back and abandons
+	// the target. No-op without a breadcrumb.
 	// verifiedFetch returns the cryptographically VERIFIED served bundle (Fetch + VerifyBundle). It is
 	// the shared primitive for BOTH the self-update reconcile health-gate AND the deferred-self-update
 	// retry (plan-8), so every self-update decision re-fetches + re-verifies — a swap never acts on
@@ -1022,10 +1023,9 @@ func runControllerMode(o controllerModeOpts) int {
 		return err
 	}
 	if err := agent.WithStateLock(o.stateDir, func() error {
-		agent.ReconcileSelfUpdatePromote(o.stateDir, BuildVersion, healthCheck, os.Stderr)
-		return nil
+		return agent.ReconcileSelfUpdatePromote(o.stateDir, BuildVersion, healthCheck, os.Stderr)
 	}); err != nil {
-		fmt.Fprintf(os.Stderr, "agent: self-update reconciliation refused: %v\n", err)
+		fmt.Fprintf(os.Stderr, "agent: self-update reconciliation failed: %v\n", err)
 		return 1
 	}
 
